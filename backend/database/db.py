@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from typing import Any, Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..models.cost import CostAnomaly
 from ..models.decision import DeciderResponseTrace
@@ -12,15 +12,24 @@ from ..models.approval import ApprovalItem
 from ..models.report import BedrockReport
 
 
+class ApprovalConflictError(Exception):
+    """Raised when an approval that is already reviewed attempts another transition."""
+    pass
+
+
 class DatabaseRepository:
     def __init__(self, db_path: str = "backend/data/sentinel.db"):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        dir_name = os.path.dirname(self.db_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._init_tables()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
     def _init_tables(self) -> None:
@@ -62,7 +71,8 @@ class DatabaseRepository:
                     reviewed_by TEXT,
                     reviewed_at TEXT,
                     notes TEXT,
-                    created_at TEXT
+                    created_at TEXT,
+                    is_simulated INTEGER DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS reports (
@@ -76,6 +86,12 @@ class DatabaseRepository:
                     generated_at TEXT
                 );
             """)
+
+            # Safe automated schema migration: verify is_simulated in approvals
+            cursor = conn.execute("PRAGMA table_info(approvals)")
+            columns = [col["name"] for col in cursor.fetchall()]
+            if "is_simulated" not in columns:
+                conn.execute("ALTER TABLE approvals ADD COLUMN is_simulated INTEGER DEFAULT 1")
 
     def save_anomaly(self, anomaly: CostAnomaly) -> None:
         with self._get_connection() as conn:
@@ -121,8 +137,8 @@ class DatabaseRepository:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO approvals (id, decision_id, anomaly_id, service, environment, suggested_action, estimated_monthly_savings, status, reviewed_by, reviewed_at, notes, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO approvals (id, decision_id, anomaly_id, service, environment, suggested_action, estimated_monthly_savings, status, reviewed_by, reviewed_at, notes, created_at, is_simulated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     approval.id,
@@ -137,6 +153,7 @@ class DatabaseRepository:
                     approval.reviewed_at,
                     approval.notes,
                     approval.created_at,
+                    1 if approval.is_simulated else 0,
                 ),
             )
 
@@ -190,6 +207,7 @@ class DatabaseRepository:
                     reviewed_at=row["reviewed_at"],
                     notes=row["notes"],
                     created_at=row["created_at"],
+                    is_simulated=bool(row["is_simulated"]) if "is_simulated" in row.keys() and row["is_simulated"] is not None else True,
                 )
                 for row in rows
             ]
@@ -197,13 +215,29 @@ class DatabaseRepository:
     def update_approval_status(
         self, approval_id: str, status: str, reviewed_by: str, notes: Optional[str] = None
     ) -> Optional[ApprovalItem]:
-        now_str = datetime.utcnow().isoformat() + "Z"
+        """Atomically update an approval status from pending to approved/rejected.
+
+        Enforces single-transition idempotency: raises ApprovalConflictError if already reviewed.
+        """
+        now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
+            # First fetch current record to verify existence and check for replay
+            cursor = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
+            current = cursor.fetchone()
+            if not current:
+                return None
+
+            if current["status"] != "pending":
+                raise ApprovalConflictError(
+                    f"Approval item '{approval_id}' was already reviewed with status '{current['status']}' "
+                    f"by {current['reviewed_by']} at {current['reviewed_at']}."
+                )
+
             conn.execute(
                 """
                 UPDATE approvals
                 SET status = ?, reviewed_by = ?, reviewed_at = ?, notes = ?
-                WHERE id = ?
+                WHERE id = ? AND status = 'pending'
                 """,
                 (status, reviewed_by, now_str, notes, approval_id),
             )
@@ -224,6 +258,7 @@ class DatabaseRepository:
                 reviewed_at=row["reviewed_at"],
                 notes=row["notes"],
                 created_at=row["created_at"],
+                is_simulated=bool(row["is_simulated"]) if "is_simulated" in row.keys() and row["is_simulated"] is not None else True,
             )
 
     def get_latest_report_for_anomaly(self, anomaly_id: str) -> Optional[BedrockReport]:
