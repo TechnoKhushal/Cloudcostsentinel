@@ -5,6 +5,7 @@ pydantic>=2.7.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
 boto3>=1.34.0
+pyjwt>=2.8.0
 
 # Strands Framework
 strands-agents>=1.62.0

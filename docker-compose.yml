@@ -1,19 +1,29 @@
 version: "3.8"
 
+# Default Local Demo Stack (Explicitly simulated / zero AWS credentials needed)
 services:
-  backend:
+  sentinel-demo:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: cloudcost-sentinel-demo
     ports:
       - "8000:8000"
     environment:
-      - ENVIRONMENT=production
+      - ENVIRONMENT=demo
       - DECIDER_PROVIDER=mock
       - BEDROCK_PROVIDER=mock
+      - NOTIFICATION_PROVIDER=mock
       - AWS_COST_EXPLORER_ENABLED=false
+      - AUTH_ENABLED=false
+      - CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173
     volumes:
       - sentinel-data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/live')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 volumes:
   sentinel-data:

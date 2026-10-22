@@ -8,7 +8,7 @@ on:
 
 jobs:
   backend-checks:
-    name: Backend Tests & Quality
+    name: Backend Tests & Compilation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,10 +20,14 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install dependencies from locked requirements
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi uvicorn pydantic httpx pytest pytest-asyncio python-dotenv boto3 strands-agents strands-decider
+          pip install -r requirements.txt
+
+      - name: Verify Python Compilation
+        run: |
+          python -m compileall -q backend patterns scripts tests
 
       - name: Run Backend Tests
         run: |
@@ -38,7 +42,7 @@ jobs:
           python patterns/threshold_aware_anomaly_response/standalone_example.py
 
   frontend-checks:
-    name: Frontend Build & Typecheck
+    name: Frontend Build & Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -49,11 +53,15 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: frontend/package.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Frontend Dependencies
         working-directory: frontend
-        run: npm ci || npm install
+        run: npm ci
+
+      - name: Lint Frontend
+        working-directory: frontend
+        run: npm run lint
 
       - name: Typecheck and Build Bundle
         working-directory: frontend

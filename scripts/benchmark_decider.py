@@ -5,6 +5,7 @@ Measures:
 - Latency (median, p95, min, max) across multiple trials.
 - Decision consistency and output distribution.
 - Distinguishes raw model decision latency from full end-to-end orchestration latency.
+- Strictly labels mock runs as 'simulated_mock_execution' and requires a real provider run for 'real_model_measurement=true'.
 - Outputs machine-readable JSON and CSV results.
 
 Usage:
@@ -16,10 +17,11 @@ import asyncio
 import csv
 import json
 import logging
+import platform
 import statistics
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -35,23 +37,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("benchmark_decider")
 
 
+def calculate_p95(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = max(0, min(len(s) - 1, int(round(0.95 * (len(s) - 1)))))
+    return round(s[idx], 3)
+
+
 async def run_benchmark(
-    trials: int = 15,
-    warmup: int = 3,
+    trials: int = 10,
+    warmup: int = 2,
     output_dir: str = "scripts/benchmark_results",
     provider: str = None,
 ) -> Dict[str, Any]:
+    if trials <= 0:
+        raise ValueError(f"trials must be > 0; got {trials}")
+    if warmup < 0:
+        raise ValueError(f"warmup must be >= 0; got {warmup}")
+
     provider_name = provider or settings.DECIDER_PROVIDER
     client = DeciderClient(provider=provider_name)
     scenarios = ["compute_spike", "database_drift", "batch_surge", "stable_baseline", "low_confidence_drift"]
 
-    logger.info("Initializing Decider benchmark (Provider: %s, Trials: %d, Warmup: %d)", provider_name, trials, warmup)
+    is_real_provider = (provider_name != "mock")
+    reported_model = settings.DECIDER_MODEL_ID if is_real_provider else "demo-policy-evaluator-v1"
+    measurement_type = "real_model_inference" if is_real_provider else "simulated_mock_execution"
+
+    logger.info(
+        "Initializing Decider benchmark (Provider: %s, Real Model: %s, Trials: %d, Warmup: %d)",
+        provider_name,
+        is_real_provider,
+        trials,
+        warmup,
+    )
 
     # 1. Warmup
-    logger.info("Executing %d warmup iterations...", warmup)
-    for _ in range(warmup):
-        test_anomaly = CostScenarioRegistry.generate_scenario_anomaly("compute_spike")
-        await client.decide(test_anomaly)
+    if warmup > 0:
+        logger.info("Executing %d warmup iterations...", warmup)
+        for _ in range(warmup):
+            test_anomaly = CostScenarioRegistry.generate_scenario_anomaly("compute_spike")
+            await client.decide(test_anomaly)
 
     # 2. Benchmark execution
     results: List[Dict[str, Any]] = []
@@ -78,7 +104,7 @@ async def run_benchmark(
                 "e2e_latency_ms": e2e_latency_ms,
                 "is_fallback": trace.is_fallback,
                 "fallback_reason": trace.fallback_reason or "",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
     # 3. Statistical summary
@@ -88,25 +114,31 @@ async def run_benchmark(
     summary = {
         "benchmark_metadata": {
             "provider": provider_name,
-            "model_id": settings.DECIDER_MODEL_ID,
+            "model_id": reported_model,
+            "measurement_type": measurement_type,
+            "real_model_measurement": is_real_provider,
             "trials_per_scenario": trials,
             "total_evaluations": len(results),
-            "executed_at": datetime.utcnow().isoformat() + "Z",
-            "is_measured": True,
+            "executed_at": datetime.now(timezone.utc).isoformat(),
+            "runtime_environment": {
+                "python_version": platform.python_version(),
+                "system": platform.system(),
+                "machine": platform.machine(),
+            },
         },
         "decision_latency_ms": {
             "min": round(min(decision_latencies), 3),
             "max": round(max(decision_latencies), 3),
             "mean": round(statistics.mean(decision_latencies), 3),
             "median": round(statistics.median(decision_latencies), 3),
-            "p95": round(statistics.quantiles(decision_latencies, n=20)[18], 3) if len(decision_latencies) >= 20 else round(max(decision_latencies), 3),
+            "p95": calculate_p95(decision_latencies),
         },
         "e2e_latency_ms": {
             "min": round(min(e2e_latencies), 3),
             "max": round(max(e2e_latencies), 3),
             "mean": round(statistics.mean(e2e_latencies), 3),
             "median": round(statistics.median(e2e_latencies), 3),
-            "p95": round(statistics.quantiles(e2e_latencies, n=20)[18], 3) if len(e2e_latencies) >= 20 else round(max(e2e_latencies), 3),
+            "p95": calculate_p95(e2e_latencies),
         },
         "action_distribution": {
             action: sum(1 for r in results if r["action"] == action)
@@ -118,7 +150,7 @@ async def run_benchmark(
     # 4. Save results to disk
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    timestamp_slug = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp_slug = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
     json_file = out_path / f"benchmark_summary_{timestamp_slug}.json"
     csv_file = out_path / f"benchmark_trials_{timestamp_slug}.csv"
@@ -135,8 +167,9 @@ async def run_benchmark(
 
     logger.info("Benchmark complete. Results written to %s and %s", json_file, csv_file)
     print("\n" + "=" * 80)
-    print(f"BENCHMARK RESULTS SUMMARY (Provider: {provider_name})")
+    print(f"BENCHMARK RESULTS SUMMARY (Provider: {provider_name} | Type: {measurement_type})")
     print("=" * 80)
+    print(f"Real Model Measurement:   {is_real_provider}")
     print(f"Total Evaluations:        {summary['benchmark_metadata']['total_evaluations']}")
     print(f"Decision Latency Median: {summary['decision_latency_ms']['median']} ms (p95: {summary['decision_latency_ms']['p95']} ms)")
     print(f"E2E Latency Median:      {summary['e2e_latency_ms']['median']} ms (p95: {summary['e2e_latency_ms']['p95']} ms)")
@@ -152,7 +185,7 @@ if __name__ == "__main__":
     parser.add_argument("--trials", type=int, default=10, help="Number of trials per scenario")
     parser.add_argument("--warmup", type=int, default=2, help="Number of warmup iterations")
     parser.add_argument("--output", type=str, default="scripts/benchmark_results", help="Output directory")
-    parser.add_argument("--provider", type=str, default=None, help="Provider to test (mock, http, inprocess)")
+    parser.add_argument("--provider", type=str, default=None, help="Provider to test (mock, http)")
 
     args = parser.parse_args()
     asyncio.run(run_benchmark(trials=args.trials, warmup=args.warmup, output_dir=args.output, provider=args.provider))

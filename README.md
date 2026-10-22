@@ -71,6 +71,7 @@ The pattern is packaged with:
 - **Strands Decider 2B in the Main Path:** Evaluates multi-dimensional telemetry (`service`, `criticality`, `spend_delta`, `budget_burn`, `persistence`, `ownership`) in a single forward pass without token-generation latency.
 - **Amazon Bedrock Grounded Narrative:** Generates executive summaries, evidence timelines, Decider choice audits, and safe investigation steps strictly grounded in observed telemetry.
 - **Zero-Mutation AWS Safety Sandbox:** Read-only telemetry access. CloudCost Sentinel never executes unverified deletions, instance terminations, or resizing operations on live AWS accounts.
+- **Single-Transition Human Approvals:** Approvals in the Sentinel dashboard update internal review states in the SQLite audit log with 409 Conflict replay protection.
 - **Calibrated Low-Confidence Fallback:** When telemetry is sparse or ambiguous, Decider's confidence drops below threshold; the system automatically and visibly escalates to `request_approval`.
 - **Reproducible Synthetic Scenarios:** Includes 5 deterministic scenarios (Compute Runaway, Database Drift, Batch Surge, Stable Baseline, Sparse Telemetry).
 - **Dark Cloud Operations Command Center:** Built with React 19, TypeScript, Vite, and Recharts, providing instant scenario replay, live confidence gauges, and collapsible wire traces.
@@ -90,7 +91,7 @@ cd Cloudcostsentinel
 
 # Create Python virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+.\.venv\Scripts\activate   # Windows PowerShell; on Linux: source .venv/bin/activate
 
 # Install backend dependencies
 pip install -r requirements.txt
@@ -119,15 +120,22 @@ Open `http://localhost:5173` in your browser.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `DECIDER_PROVIDER` | `mock` | `mock` (simulated adapter), `http` (local/remote `strands-decider serve`), or `inprocess` |
-| `STRANDS_DECIDER_URL` | `http://127.0.0.1:8000/v1/systemone` | HTTP endpoint serving Strands Decider wire protocol |
+| `DECIDER_PROVIDER` | `mock` | `mock` (calibrated simulated adapter) or `http` (connects to external `strands-decider serve` instance) |
+| `STRANDS_DECIDER_URL` | `http://127.0.0.1:8080/v1/systemone` | HTTP endpoint serving Strands Decider SystemOne wire protocol (port 8080) |
 | `DECIDER_MODEL_ID` | `StrandsAgents/strands-decider-2B-hobson-v19` | Strands Decider model identifier |
 | `DECIDER_MIN_CONFIDENCE` | `0.65` | Confidence threshold below which the agent conservatively falls back to `request_approval` |
 | `BEDROCK_PROVIDER` | `mock` | `mock` (deterministic grounded narrative adapter) or `bedrock` (live Amazon Bedrock) |
 | `AWS_REGION` | `us-east-1` | AWS region for Bedrock and Cost Explorer |
 | `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-7-sonnet-20250219-v1:0` | Amazon Bedrock foundation model ID |
 | `AWS_COST_EXPLORER_ENABLED`| `false` | Read-only live AWS Cost Explorer queries (disabled by default) |
-| `DATABASE_PATH` | `backend/data/sentinel.db` | SQLite database path for decision traces and approvals |
+| `AUTH_ENABLED` | `false` | When true, validates JWT Bearer tokens; in dev mode defaults to false with dev bypass |
+| `NOTIFICATION_PROVIDER` | `mock` | `disabled`, `mock`, or `sns` (AWS Simple Notification Service) |
+| `DATABASE_PATH` | `backend/data/sentinel.db` | SQLite database path with automated schema migrations and WAL mode |
+
+Detailed documentation:
+- [Security Architecture & Threat Model](docs/SECURITY.md)
+- [Operations Runbook](docs/RUNBOOK.md)
+- [Production Hardening Audit Log](docs/PRODUCTION_HARDENING_LOG.md)
 
 ---
 
@@ -136,7 +144,7 @@ Open `http://localhost:5173` in your browser.
 ### Connecting Real Strands Decider 2B
 1. Serve the official model using the `strands-decider` package:
    ```bash
-   strands-decider serve StrandsAgents/strands-decider-2B-hobson-v19 --port 8080
+   strands-decider serve --model StrandsAgents/strands-decider-2B-hobson-v19 --port 8080
    ```
 2. In `.env`, set:
    ```env
@@ -145,11 +153,9 @@ Open `http://localhost:5173` in your browser.
    ```
 
 ### Connecting Amazon Bedrock
-1. Configure your AWS credentials via `aws configure` or environment variables:
+1. Configure your AWS credentials via `aws configure` or standard IAM instance profile:
    ```bash
    export AWS_REGION=us-east-1
-   export AWS_ACCESS_KEY_ID=...
-   export AWS_SECRET_ACCESS_KEY=...
    ```
 2. Enable model access for `Anthropic Claude 3.7 Sonnet` in your AWS Bedrock Console.
 3. In `.env`, set:
@@ -164,7 +170,7 @@ Open `http://localhost:5173` in your browser.
 Run the full automated test suite (backend formulas, Decider routing, Bedrock grounding, safety fallbacks, and the Policy pattern):
 
 ```bash
-# Run backend test suite (15 passed)
+# Run backend test suite (22 passed)
 python -m pytest -v tests/test_backend.py
 
 # Run standalone Policy pattern test suite (5 passed)
@@ -183,7 +189,7 @@ python scripts/benchmark_decider.py --trials 10 --warmup 2
 
 - **Read-Only Telemetry:** AWS Cost Explorer queries are strictly read-only (`ce:GetCostAndUsage`).
 - **No Cloud Destruction:** CloudCost Sentinel never executes unverified deletions, instance terminations, or resizing operations on live AWS accounts.
-- **Human-in-the-Loop:** Approvals recorded in the dashboard update internal review states in the SQLite audit log and never trigger blind mutations.
+- **Human-in-the-Loop:** Approvals recorded in the dashboard update internal review states in the SQLite audit log with 409 Conflict replay protection.
 
 ---
 
