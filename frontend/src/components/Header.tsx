@@ -30,15 +30,15 @@ export const Header: React.FC<HeaderProps> = ({ health, isSimulated }) => {
         </span>
 
         {/* Decider Model Pill */}
-        <span className="status-pill pill-cyan">
+        <span className={`status-pill ${health?.providers.decider.provider === "http" ? "pill-cyan" : "pill-amber"}`}>
           <Cpu size={14} />
-          Strands Decider 2B: {health?.providers.decider.provider || "mock"}
+          Decider 2B: {health?.providers.decider.provider === "http" ? "Live HTTP" : "Simulated Mock"}
         </span>
 
         {/* Bedrock Model Pill */}
-        <span className="status-pill pill-purple">
+        <span className={`status-pill ${health?.providers.bedrock.provider === "bedrock" ? "pill-purple" : "pill-amber"}`}>
           <Sparkles size={14} />
-          Bedrock: {health?.providers.bedrock.provider === "bedrock" ? "Claude 3.7 Sonnet" : "Demo Narrator"}
+          Bedrock: {health?.providers.bedrock.provider === "bedrock" ? "Claude 3.7 Sonnet (Live)" : "Demo Narrator (Simulated)"}
         </span>
 
         {/* AWS Cost Explorer Status */}

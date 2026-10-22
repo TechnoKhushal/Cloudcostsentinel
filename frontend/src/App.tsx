@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Header } from "./components/Header";
 import { ScenarioControls } from "./components/ScenarioControls";
 import { OverviewCards } from "./components/OverviewCards";
@@ -32,6 +32,62 @@ export const App: React.FC = () => {
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; isError: boolean } | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  const showToast = (text: string, isError: boolean = false) => {
+    setToastMessage({ text, isError });
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        setToastMessage(null);
+      }
+    }, 4500);
+  };
+
+  const executeAnalysis = async (scenarioId: string) => {
+    // Cancel in-flight request to prevent race conditions on fast scenario toggling
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await runAnalysis(scenarioId, false, controller.signal);
+      if (!isMountedRef.current) return;
+      setAnomaly(res.anomaly);
+      setDecision(res.decision);
+      setReport(res.report);
+      if (res.approval) {
+        setApprovals((prev) => [res.approval!, ...prev.filter((a) => a.id !== res.approval!.id)]);
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        return; // Normal cancellation from switching scenarios
+      }
+      if (isMountedRef.current) {
+        setError(err.message || "Analysis failed.");
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  };
 
   // Initial Load
   useEffect(() => {
@@ -42,6 +98,7 @@ export const App: React.FC = () => {
           fetchScenarios().catch(() => []),
           fetchApprovals().catch(() => []),
         ]);
+        if (!isMountedRef.current) return;
         setHealth(healthData);
         setScenarios(scenariosData);
         setApprovals(approvalsData);
@@ -49,29 +106,13 @@ export const App: React.FC = () => {
         // Run initial analysis on default scenario
         await executeAnalysis("compute_spike");
       } catch (err: any) {
-        setError(err.message || "Failed to initialize application.");
+        if (isMountedRef.current) {
+          setError(err.message || "Failed to initialize application.");
+        }
       }
     }
     init();
   }, []);
-
-  const executeAnalysis = async (scenarioId: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await runAnalysis(scenarioId);
-      setAnomaly(res.anomaly);
-      setDecision(res.decision);
-      setReport(res.report);
-      if (res.approval) {
-        setApprovals((prev) => [res.approval!, ...prev.filter((a) => a.id !== res.approval!.id)]);
-      }
-    } catch (err: any) {
-      setError(err.message || "Analysis failed.");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSelectScenario = (id: string) => {
     setSelectedScenarioId(id);
@@ -92,8 +133,9 @@ export const App: React.FC = () => {
     try {
       const updated = await submitApprovalDecision(id, action);
       setApprovals((prev) => prev.map((a) => (a.id === id ? updated : a)));
+      showToast(`Approval ${id} successfully recorded as ${action.toUpperCase()}.`, false);
     } catch (err: any) {
-      alert(`Approval error: ${err.message}`);
+      showToast(err.message || "Approval decision failed.", true);
     }
   };
 
@@ -111,8 +153,44 @@ export const App: React.FC = () => {
         loading={loading}
       />
 
+      {/* Accessible Inline Notification Toast */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            background: toastMessage.isError ? "rgba(239, 68, 68, 0.2)" : "rgba(16, 185, 129, 0.2)",
+            border: `1px solid ${toastMessage.isError ? "rgba(239, 68, 68, 0.5)" : "rgba(16, 185, 129, 0.5)"}`,
+            padding: "0.6rem 1rem",
+            borderRadius: "6px",
+            color: toastMessage.isError ? "#fca5a5" : "#6ee7b7",
+            fontSize: "0.85rem",
+            marginBottom: "1rem",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>{toastMessage.text}</span>
+          <button
+            onClick={() => setToastMessage(null)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              fontSize: "1rem",
+              paddingLeft: "0.5rem",
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {error && (
         <div
+          role="alert"
           style={{
             background: "rgba(239, 68, 68, 0.15)",
             border: "1px solid rgba(239, 68, 68, 0.4)",

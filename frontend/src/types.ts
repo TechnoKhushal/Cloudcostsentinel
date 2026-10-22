@@ -107,25 +107,36 @@ export interface HealthInfo {
   service: string;
   version: string;
   environment: string;
+  auth?: {
+    enabled: boolean;
+    mode: string;
+    warning?: string | null;
+  };
   providers: {
     decider: {
       provider: string;
+      state: string;
       model_id: string;
       min_confidence_threshold: number;
       endpoint: string;
-      ready: boolean;
+      ready?: boolean;
     };
     bedrock: {
       provider: string;
+      state: string;
       model_id: string;
       region: string;
-      ready: boolean;
+      ready?: boolean;
     };
     cost_explorer: {
       enabled: boolean;
       status: string;
       message: string;
       region?: string;
+    };
+    notifications?: {
+      provider: string;
+      state: string;
     };
   };
   safety_guarantee: string;
