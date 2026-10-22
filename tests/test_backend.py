@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -275,8 +276,13 @@ async def test_api_analyze_compute_spike_flow():
 
 @pytest.mark.asyncio
 async def test_api_decider_systemone_wire_protocol():
+    """Test fixture endpoint must be disabled by default (returns 404).
+    When ENABLE_TEST_FIXTURE_ENDPOINT=true, it should serve valid Strands wire-protocol responses.
+    This test validates the disabled case.
+    """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Default (ENABLE_TEST_FIXTURE_ENDPOINT=false) → 404
         payload = {
             "state": "Service: Amazon EC2 (Production). Spend Delta: +$850/day. High spike.",
             "model": "StrandsAgents/strands-decider-2B-hobson-v19",
@@ -293,14 +299,8 @@ async def test_api_decider_systemone_wire_protocol():
             },
         }
         resp = await ac.post("/v1/systemone", json=payload)
-        assert resp.status_code == 200
-        assert resp.headers.get("X-Sentinel-Test-Fixture") == "true"
-        res_data = resp.json()
-        assert "answers" in res_data
-        ans = res_data["answers"]["operational_response"]
-        assert ans["type"] == "choice"
-        assert ans["choice"] == "request_approval"
-        assert ans["confidence"] > 0.0
+        assert resp.status_code == 404
+        assert "disabled" in resp.json()["detail"].lower()
 
 
 # ==============================================================================
@@ -408,23 +408,58 @@ def test_startup_validation_rules():
     with pytest.raises(ValueError, match="Invalid DECIDER_PROVIDER"):
         Settings(DECIDER_PROVIDER="unknown_provider_xyz").validate_startup()
 
+    # 'inprocess' provider removed from allowed set
+    with pytest.raises(ValueError, match="Invalid DECIDER_PROVIDER"):
+        Settings(DECIDER_PROVIDER="inprocess").validate_startup()
+
     # Production refuses wildcard CORS
     with pytest.raises(ValueError, match="Wildcard"):
         Settings(
             ENVIRONMENT="production",
             CORS_ORIGINS=["*"],
             AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://example.com/.well-known/jwks.json",
+            AUTH_ISSUER="https://example.com",
+            AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="http",
             BEDROCK_PROVIDER="bedrock",
         ).validate_startup()
 
-    # Production refuses unauthenticated mode without override
-    with pytest.raises(ValueError, match="Production startup refused: AUTH_ENABLED"):
+    # Production refuses AUTH_ENABLED=False (escape hatch removed)
+    with pytest.raises(ValueError, match="AUTH_ENABLED must be True"):
         Settings(
             ENVIRONMENT="production",
             CORS_ORIGINS=["https://sentinel.internal"],
             AUTH_ENABLED=False,
-            ALLOW_UNAUTHENTICATED_IN_PRODUCTION=False,
+        ).validate_startup()
+
+    # Production with AUTH_ENABLED=True requires OIDC config
+    with pytest.raises(ValueError, match="AUTH_ENABLED=true requires"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.internal"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL=None,
+            AUTH_ISSUER=None,
+            AUTH_AUDIENCE=None,
+            DECIDER_PROVIDER="mock",
+            BEDROCK_PROVIDER="mock",
+            ALLOW_MOCK_IN_PRODUCTION=True,
+        ).validate_startup()
+
+    # Production refuses ENABLE_TEST_FIXTURE_ENDPOINT=true
+    with pytest.raises(ValueError, match="ENABLE_TEST_FIXTURE_ENDPOINT must be false"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.internal"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://example.com/.well-known/jwks.json",
+            AUTH_ISSUER="https://example.com",
+            AUTH_AUDIENCE="api://sentinel",
+            DECIDER_PROVIDER="mock",
+            BEDROCK_PROVIDER="mock",
+            ALLOW_MOCK_IN_PRODUCTION=True,
+            ENABLE_TEST_FIXTURE_ENDPOINT=True,
         ).validate_startup()
 
     # HTTP decider cannot self-reference app's own port
@@ -483,3 +518,99 @@ async def test_real_http_decider_mock_transport_success():
         assert trace.confidence == 0.775
         assert trace.probabilities["notify_owner"] == 0.85
         assert trace.is_fallback is False
+
+
+
+# ==============================================================================
+# 9. Auth Hardening — P0 Regression Tests
+# ==============================================================================
+
+def test_auth_requires_oidc_when_enabled():
+    """When AUTH_ENABLED=True, startup should require JWKS + issuer + audience in production."""
+    # Missing all three OIDC fields in production context
+    with pytest.raises(ValueError, match="AUTH_ENABLED=true requires"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.internal"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL=None,
+            AUTH_ISSUER=None,
+            AUTH_AUDIENCE=None,
+            DECIDER_PROVIDER="mock",
+            BEDROCK_PROVIDER="mock",
+            ALLOW_MOCK_IN_PRODUCTION=True,
+        ).validate_startup()
+
+
+def test_inprocess_provider_rejected():
+    """'inprocess' provider must be rejected — it raises NotImplementedError at runtime."""
+    with pytest.raises(ValueError, match="Invalid DECIDER_PROVIDER"):
+        Settings(DECIDER_PROVIDER="inprocess").validate_startup()
+
+
+def test_fixture_endpoint_rejected_in_production():
+    """ENABLE_TEST_FIXTURE_ENDPOINT=true must be rejected in production."""
+    with pytest.raises(ValueError, match="ENABLE_TEST_FIXTURE_ENDPOINT must be false"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.internal"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://example.com/.well-known/jwks.json",
+            AUTH_ISSUER="https://example.com",
+            AUTH_AUDIENCE="api://sentinel",
+            DECIDER_PROVIDER="mock",
+            BEDROCK_PROVIDER="mock",
+            ALLOW_MOCK_IN_PRODUCTION=True,
+            ENABLE_TEST_FIXTURE_ENDPOINT=True,
+        ).validate_startup()
+
+
+@pytest.mark.asyncio
+async def test_auth_enabled_rejects_missing_token():
+    """When AUTH_ENABLED=True, missing Bearer token returns 401."""
+    import unittest.mock
+    # Temporarily set AUTH_ENABLED=True on the app's settings singleton
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", True):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/api/demo/scenarios")
+            # With AUTH_ENABLED=True but no token provided → 401
+            assert resp.status_code == 401
+            assert "Missing Authorization Bearer token" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_auth_enabled_rejects_malformed_token():
+    """When AUTH_ENABLED=True, a malformed/forged JWT returns 401."""
+    import unittest.mock
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", True):
+        # Patch _get_jwks_client to raise PyJWKClient would normally need a network call;
+        # instead we test that a garbage token fails decode gracefully.
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get(
+                "/api/demo/scenarios",
+                headers={"Authorization": "Bearer not.a.real.jwt"},
+            )
+            assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_fixture_endpoint_disabled_by_default():
+    """The /v1/systemone endpoint must return 404 when ENABLE_TEST_FIXTURE_ENDPOINT=false (default)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        payload = {
+            "state": "test",
+            "model": "StrandsAgents/strands-decider-2B-hobson-v19",
+            "questions": {
+                "q": {
+                    "type": "choice",
+                    "instructions": "test",
+                    "criteria": {"monitor": "m", "notify_owner": "n", "request_approval": "r"},
+                }
+            },
+        }
+        resp = await ac.post("/v1/systemone", json=payload)
+        assert resp.status_code == 404
+        assert "disabled" in resp.json()["detail"].lower()

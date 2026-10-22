@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
+
 import jwt
+from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -12,6 +14,24 @@ from .config import settings
 logger = logging.getLogger("cloudcost_sentinel.auth")
 
 security_scheme = HTTPBearer(auto_error=False)
+
+# Module-level JWKS client — created once per process when AUTH_JWKS_URL is set.
+# cache_keys=True uses PyJWT's in-process LRU cache, avoiding per-request JWKS fetches.
+_jwks_client: Optional[PyJWKClient] = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    """Lazily create and cache the PyJWKClient singleton."""
+    global _jwks_client
+    if _jwks_client is None:
+        if not settings.AUTH_JWKS_URL:
+            raise RuntimeError(
+                "AUTH_JWKS_URL is required when AUTH_ENABLED=true. "
+                "Set it to your OIDC provider's JWKS endpoint, e.g. "
+                "https://cognito-idp.us-east-1.amazonaws.com/<pool_id>/.well-known/jwks.json"
+            )
+        _jwks_client = PyJWKClient(settings.AUTH_JWKS_URL, cache_keys=True)
+    return _jwks_client
 
 
 class AuthenticatedPrincipal(BaseModel):
@@ -28,23 +48,27 @@ def get_current_principal(
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme),
 ) -> AuthenticatedPrincipal:
     """Extract and verify caller principal.
-    
+
     In development/demo mode with AUTH_ENABLED=False:
       Allows a default developer principal with both viewer & reviewer privileges,
       clearly marked as is_authenticated=False.
-    
+
+      NOTE: This bypass is rejected when ENVIRONMENT=production — the service
+      refuses to start in production with AUTH_ENABLED=False (see validate_startup).
+
     In production mode with AUTH_ENABLED=True:
-      Strictly validates Bearer JWT token against configured JWKS / issuer / audience.
-      Rejects unauthenticated or expired requests with 401 Unauthorized.
+      Strictly validates Bearer JWT token against configured JWKS / issuer / audience
+      using PyJWKClient to fetch the actual RS256 signing key from the OIDC provider.
+      Rejects unauthenticated, expired, wrong-issuer, wrong-audience, and forged requests
+      with 401 Unauthorized.
     """
     if not settings.AUTH_ENABLED:
-        if settings.ENVIRONMENT == "production" and not settings.ALLOW_UNAUTHENTICATED_IN_PRODUCTION:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication is required in production environment.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        # Development mode bypass
+        # Development mode bypass. Production startup validation (config.py) ensures
+        # AUTH_ENABLED=False is rejected before serving production traffic.
+        logger.debug(
+            "AUTH_ENABLED=false: issuing development bypass principal. "
+            "This mode must never be used in production."
+        )
         return AuthenticatedPrincipal(
             sub="dev-lead-engineer",
             email="lead-cloud-engineer@company.internal",
@@ -62,31 +86,31 @@ def get_current_principal(
 
     token = credentials.credentials
     try:
-        # Decode without verification if no secret/JWKS configured (e.g. behind an authenticating reverse-proxy / ALB)
-        # Otherwise decode with options
-        options = {
-            "verify_signature": bool(settings.AUTH_JWKS_URL),
-            "verify_exp": True,
-            "verify_iss": bool(settings.AUTH_ISSUER),
-            "verify_aud": bool(settings.AUTH_AUDIENCE),
-        }
-        
-        # When JWKS or symmetric key is provided, PyJWT handles it;
-        # For general OIDC tokens passed from an ALB or API Gateway:
+        # Fetch the actual RS256 signing key from the OIDC provider's JWKS endpoint.
+        # PyJWKClient uses the token's 'kid' header to select the correct key.
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
+        # Validate signature, expiry, issuer, and audience in a single call.
         claims = jwt.decode(
             token,
-            key="",  # unverified signature if no local key or verification done by reverse proxy
-            algorithms=["RS256", "HS256"],
-            options=options,
+            signing_key.key,
+            algorithms=["RS256"],
             issuer=settings.AUTH_ISSUER,
             audience=settings.AUTH_AUDIENCE,
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iss": bool(settings.AUTH_ISSUER),
+                "verify_aud": bool(settings.AUTH_AUDIENCE),
+            },
         )
 
         sub = claims.get("sub", "unknown-user")
         email = claims.get("email", claims.get("preferred_username", sub))
-        
+
         # Extract roles from standard claim locations: "roles", "groups", "cognito:groups"
-        roles = []
+        roles: List[str] = []
         if isinstance(claims.get("roles"), list):
             roles.extend(claims["roles"])
         if isinstance(claims.get("groups"), list):
@@ -106,14 +130,33 @@ def get_current_principal(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication token has expired.",
-            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+        )
+    except jwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token issuer.",
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+        )
+    except jwt.InvalidAudienceError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token audience.",
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+        )
+    except (jwt.InvalidSignatureError, jwt.DecodeError) as sig_err:
+        logger.warning("JWT signature/decode failure: %s", sig_err)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token signature verification failed.",
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
     except Exception as exc:
         logger.warning("Token verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication token: {str(exc)}",
-            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+            detail="Invalid authentication token.",
+            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
 
 

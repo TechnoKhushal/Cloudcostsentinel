@@ -51,11 +51,6 @@ class Settings(BaseModel):
     AUTH_ISSUER: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_ISSUER"))
     AUTH_AUDIENCE: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_AUDIENCE"))
     AUTH_JWKS_URL: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_JWKS_URL"))
-    ALLOW_UNAUTHENTICATED_IN_PRODUCTION: bool = Field(
-        default_factory=lambda: os.getenv("ALLOW_UNAUTHENTICATED_IN_PRODUCTION", "false").lower()
-        in ("true", "1", "yes")
-    )
-
     # Strands Decider 2B Settings
     DECIDER_PROVIDER: str = Field(default_factory=lambda: os.getenv("DECIDER_PROVIDER", "mock"))
     # Default to port 8080 (the external strands-decider serve instance) to avoid self-referential ambiguity
@@ -104,14 +99,20 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("ALLOW_MOCK_IN_PRODUCTION", "false").lower() in ("true", "1", "yes")
     )
 
+    # Test fixture endpoint — disabled by default; never enable in production
+    ENABLE_TEST_FIXTURE_ENDPOINT: bool = Field(
+        default_factory=lambda: os.getenv("ENABLE_TEST_FIXTURE_ENDPOINT", "false").lower() in ("true", "1", "yes")
+    )
+
     def validate_startup(self) -> None:
         """Validate startup configuration to prevent unsafe states."""
         if not (0.0 < self.DECIDER_MIN_CONFIDENCE <= 1.0):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
 
-        allowed_deciders = {"mock", "http", "inprocess"}
+        # 'inprocess' removed — it raises NotImplementedError and must not be allowed.
+        allowed_deciders = {"mock", "http"}
         if self.DECIDER_PROVIDER not in allowed_deciders:
-            raise ValueError(f"Invalid DECIDER_PROVIDER '{self.DECIDER_PROVIDER}'. Allowed: {allowed_deciders}")
+            raise ValueError(f"Invalid DECIDER_PROVIDER '{self.DECIDER_PROVIDER}'. Allowed: {sorted(allowed_deciders)}")
 
         allowed_bedrock = {"mock", "bedrock"}
         if self.BEDROCK_PROVIDER not in allowed_bedrock:
@@ -120,10 +121,37 @@ class Settings(BaseModel):
         if self.ENVIRONMENT == "production":
             if "*" in self.CORS_ORIGINS:
                 raise ValueError("Wildcard '*' in CORS_ORIGINS is prohibited in production.")
-            if not self.AUTH_ENABLED and not self.ALLOW_UNAUTHENTICATED_IN_PRODUCTION:
-                raise ValueError("Production startup refused: AUTH_ENABLED must be True (or set ALLOW_UNAUTHENTICATED_IN_PRODUCTION=true).")
+
+            # Production requires AUTH_ENABLED=True — the ALLOW_UNAUTHENTICATED_IN_PRODUCTION
+            # escape hatch has been removed. There is no override for production auth bypass.
+            if not self.AUTH_ENABLED:
+                raise ValueError(
+                    "Production startup refused: AUTH_ENABLED must be True in production. "
+                    "Configure AUTH_JWKS_URL, AUTH_ISSUER, and AUTH_AUDIENCE."
+                )
+
+            if self.AUTH_ENABLED:
+                # Validate full OIDC configuration when auth is enabled
+                missing = []
+                if not self.AUTH_JWKS_URL:
+                    missing.append("AUTH_JWKS_URL")
+                if not self.AUTH_ISSUER:
+                    missing.append("AUTH_ISSUER")
+                if not self.AUTH_AUDIENCE:
+                    missing.append("AUTH_AUDIENCE")
+                if missing:
+                    raise ValueError(
+                        f"AUTH_ENABLED=true requires these environment variables to be set: {missing}"
+                    )
+
             if (self.DECIDER_PROVIDER == "mock" or self.BEDROCK_PROVIDER == "mock") and not self.ALLOW_MOCK_IN_PRODUCTION:
                 raise ValueError("Production startup refused: mock providers cannot be used in production without ALLOW_MOCK_IN_PRODUCTION=true.")
+
+            if self.ENABLE_TEST_FIXTURE_ENDPOINT:
+                raise ValueError(
+                    "Production startup refused: ENABLE_TEST_FIXTURE_ENDPOINT must be false in production. "
+                    "The /v1/systemone test fixture must never be active in production."
+                )
 
         if self.DECIDER_PROVIDER == "http":
             # Guard against pointing live HTTP decider to application's own port
