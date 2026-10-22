@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-checks:
+    name: Backend Tests & Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pydantic httpx pytest pytest-asyncio python-dotenv boto3 strands-agents strands-decider
+
+      - name: Run Backend Tests
+        run: |
+          python -m pytest -v tests/test_backend.py
+
+      - name: Run Pattern Tests
+        run: |
+          python -m pytest -v patterns/threshold_aware_anomaly_response/test_pattern.py
+
+      - name: Execute Standalone Pattern Demo
+        run: |
+          python patterns/threshold_aware_anomaly_response/standalone_example.py
+
+  frontend-checks:
+    name: Frontend Build & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+
+      - name: Typecheck and Build Bundle
+        working-directory: frontend
+        run: npm run build

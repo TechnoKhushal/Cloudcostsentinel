@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DECIDER_PROVIDER=mock
+      - BEDROCK_PROVIDER=mock
+      - AWS_COST_EXPLORER_ENABLED=false
+    volumes:
+      - sentinel-data:/app/backend/data
+
+volumes:
+  sentinel-data:
