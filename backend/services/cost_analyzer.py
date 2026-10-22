@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import calendar
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from ..models.cost import CostAnomaly, CostDataPoint, SpendMetrics
 
@@ -9,8 +10,8 @@ from ..models.cost import CostAnomaly, CostDataPoint, SpendMetrics
 def calculate_spend_metrics(
     datapoints: List[float],
     monthly_budget: float,
-    current_day_of_month: int = 18,
-    days_in_month: int = 30,
+    current_day_of_month: Optional[int] = None,
+    days_in_month: Optional[int] = None,
     anomaly_threshold_pct: float = 20.0,
     baseline_window_days: int = 7,
 ) -> SpendMetrics:
@@ -25,6 +26,11 @@ def calculate_spend_metrics(
     6. Budget Burn: (forecast_month_end / monthly_budget) * 100
     7. Uncertainty Flag: True if baseline sample size < 5 or stable variance > 0.4.
     """
+    now = datetime.now(timezone.utc)
+    if current_day_of_month is None:
+        current_day_of_month = now.day
+    if days_in_month is None:
+        days_in_month = calendar.monthrange(now.year, now.month)[1]
     if not datapoints:
         return SpendMetrics(
             current_spend=0.0,

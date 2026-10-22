@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..models.cost import CostAnomaly
@@ -94,25 +94,49 @@ class StrandsBedrockNarrator:
             )
 
             response = await agent.run_async(prompt) if hasattr(agent, "run_async") else agent(prompt)
-            content_str = str(response)
+            content_str = str(response).strip()
+
+            # Robust markdown code block stripping
+            if content_str.startswith("```json"):
+                content_str = content_str[7:]
+            elif content_str.startswith("```"):
+                content_str = content_str[3:]
+            if content_str.endswith("```"):
+                content_str = content_str[:-3]
+            content_str = content_str.strip()
 
             # Extract JSON block
             if "{" in content_str and "}" in content_str:
                 json_start = content_str.find("{")
                 json_end = content_str.rfind("}") + 1
                 data = json.loads(content_str[json_start:json_end])
+
+                # Strict validation of extracted fields
+                if not isinstance(data, dict):
+                    logger.warning("Bedrock returned non-dictionary JSON.")
+                    return None
+
+                def clean_list(val: Any, max_items: int = 10, max_len: int = 300) -> List[str]:
+                    if isinstance(val, list):
+                        return [str(x)[:max_len] for x in val[:max_items] if str(x).strip()]
+                    return []
+
+                title = str(data.get("title", f"Cost Investigation: {anomaly.service}"))[:150]
+                exec_sum = str(data.get("executive_summary", ""))[:1000]
+                action_audit = str(data.get("decider_action_audit", ""))[:800]
+
                 return BedrockReport(
                     report_id=report_id,
                     anomaly_id=anomaly.anomaly_id,
                     decision_id=trace.decision_id,
-                    title=data.get("title", f"Cost Investigation: {anomaly.service}"),
-                    executive_summary=data.get("executive_summary", ""),
-                    observed_facts=data.get("observed_facts", []),
-                    decider_action_audit=data.get("decider_action_audit", ""),
-                    likely_investigation_areas=data.get("likely_investigation_areas", []),
-                    safe_recommendations=data.get("safe_recommendations", []),
-                    assumptions_and_limitations=data.get("assumptions_and_limitations", []),
-                    follow_up_checklist=data.get("follow_up_checklist", []),
+                    title=title,
+                    executive_summary=exec_sum,
+                    observed_facts=clean_list(data.get("observed_facts")),
+                    decider_action_audit=action_audit,
+                    likely_investigation_areas=clean_list(data.get("likely_investigation_areas")),
+                    safe_recommendations=clean_list(data.get("safe_recommendations")),
+                    assumptions_and_limitations=clean_list(data.get("assumptions_and_limitations")),
+                    follow_up_checklist=clean_list(data.get("follow_up_checklist")),
                     provider="amazon-bedrock",
                     model_id=self.model_id,
                     is_simulated=False,

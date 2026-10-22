@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import calendar
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
@@ -60,8 +61,8 @@ class AWSCostExplorerService:
 
             return {
                 "enabled": True,
-                "status": "connected",
-                "message": f"Connected to AWS Account {account_masked} in {self.region_name}",
+                "status": "configured_credentials_present",
+                "message": f"AWS credentials found for account {account_masked} in {self.region_name}. Read permission verified upon query.",
                 "account_masked": account_masked,
                 "region": self.region_name,
             }
@@ -77,7 +78,7 @@ class AWSCostExplorerService:
             return {
                 "enabled": True,
                 "status": f"permission_denied_{code}",
-                "message": f"AWS error ({code}): verify ce:GetCostAndUsage and sts:GetCallerIdentity permissions.",
+                "message": f"AWS credential check error ({code}): verify sts:GetCallerIdentity permission.",
                 "region": self.region_name,
             }
         except Exception as exc:
@@ -97,35 +98,72 @@ class AWSCostExplorerService:
 
         try:
             client = boto3.client("ce", region_name=self.region_name)
-            end_date = datetime.utcnow().date()
+            now_utc = datetime.now(timezone.utc)
+            # TimePeriod.End is exclusive in Cost Explorer API.
+            # Daily billing metrics typically lag by 24-48 hours.
+            end_date = now_utc.date()
             start_date = end_date - timedelta(days=days)
 
-            response = client.get_cost_and_usage(
-                TimePeriod={
-                    "Start": start_date.strftime("%Y-%m-%d"),
-                    "End": end_date.strftime("%Y-%m-%d"),
-                },
-                Granularity="DAILY",
-                Metrics=["UnblendedCost"],
-                GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
-            )
+            results_by_time: List[Dict[str, Any]] = []
+            next_page_token: Optional[str] = None
 
-            # Parse results
-            results_by_time = response.get("ResultsByTime", [])
+            # Bounded pagination loop (max 5 pages for safety)
+            for _ in range(5):
+                params: Dict[str, Any] = {
+                    "TimePeriod": {
+                        "Start": start_date.strftime("%Y-%m-%d"),
+                        "End": end_date.strftime("%Y-%m-%d"),
+                    },
+                    "Granularity": "DAILY",
+                    "Metrics": ["UnblendedCost"],
+                    "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
+                }
+                if next_page_token:
+                    params["NextPageToken"] = next_page_token
+
+                response = client.get_cost_and_usage(**params)
+                results_by_time.extend(response.get("ResultsByTime", []))
+                next_page_token = response.get("NextPageToken")
+                if not next_page_token:
+                    break
+
             if not results_by_time:
                 return None, "No cost data returned by AWS Cost Explorer for specified period."
 
+            # Organize daily totals and per-service breakdown
             daily_totals: Dict[str, float] = {}
+            service_cumulative: Dict[str, float] = {}
+
             for item in results_by_time:
                 date_key = item.get("TimePeriod", {}).get("Start", "")
-                total = sum(
-                    float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0))
-                    for group in item.get("Groups", [])
-                )
-                daily_totals[date_key] = round(total, 2)
+                day_total = 0.0
+                for group in item.get("Groups", []):
+                    keys = group.get("Keys", [])
+                    service_name = keys[0] if keys else "Unknown Service"
+                    amount = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0))
+                    # Ignore negative adjustments/credits for baseline spend calculations
+                    valid_amount = max(0.0, amount)
+                    day_total += valid_amount
+                    service_cumulative[service_name] = service_cumulative.get(service_name, 0.0) + valid_amount
+
+                daily_totals[date_key] = round(day_total, 2)
 
             data_points = list(daily_totals.values())
-            metrics = calculate_spend_metrics(data_points, monthly_budget=monthly_budget)
+            current_day = now_utc.day
+            days_in_current_month = calendar.monthrange(now_utc.year, now_utc.month)[1]
+
+            metrics = calculate_spend_metrics(
+                data_points,
+                monthly_budget=monthly_budget,
+                current_day_of_month=current_day,
+                days_in_month=days_in_current_month,
+            )
+
+            # Identify top contributing service
+            top_service = "All AWS Services"
+            if service_cumulative:
+                sorted_services = sorted(service_cumulative.items(), key=lambda x: x[1], reverse=True)
+                top_service = sorted_services[0][0]
 
             time_series = [
                 CostDataPoint(
@@ -133,7 +171,7 @@ class AWSCostExplorerService:
                     spend=amt,
                     baseline=metrics.baseline_spend,
                     is_anomaly=(amt >= metrics.baseline_spend * 1.2),
-                    service="All AWS Services (Aggregated)",
+                    service=top_service,
                     environment="production",
                 )
                 for dt, amt in daily_totals.items()
@@ -142,15 +180,15 @@ class AWSCostExplorerService:
             anomaly = CostAnomaly(
                 anomaly_id=f"ce-live-{end_date.strftime('%Y-%m-%d')}",
                 scenario_id="aws_live",
-                scenario_name="Live AWS Cost Explorer Telemetry",
-                service="Aggregated AWS Account",
+                scenario_name=f"Live AWS Cost Explorer ({top_service})",
+                service=top_service,
                 environment="production",
-                owner="aws-account-admin",
+                owner="unknown",  # Honestly unassigned; never invent verified owner from CE aggregate
                 criticality="high" if metrics.anomaly_detected else "medium",
                 metrics=metrics,
                 time_series=time_series,
                 currency="USD",
-                detected_at=datetime.utcnow().isoformat() + "Z",
+                detected_at=now_utc.isoformat(),
                 is_simulated=False,
             )
 
