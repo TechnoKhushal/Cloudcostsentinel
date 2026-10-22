@@ -106,6 +106,7 @@ class AWSCostExplorerService:
 
             results_by_time: List[Dict[str, Any]] = []
             next_page_token: Optional[str] = None
+            pagination_cap_hit = False
 
             # Bounded pagination loop (max 5 pages for safety)
             for _ in range(5):
@@ -126,6 +127,14 @@ class AWSCostExplorerService:
                 next_page_token = response.get("NextPageToken")
                 if not next_page_token:
                     break
+            else:
+                # Loop exhausted all 5 pages but more data remains
+                if next_page_token:
+                    pagination_cap_hit = True
+                    logger.warning(
+                        "AWS Cost Explorer pagination cap (5 pages) reached; "
+                        "cost data may be incomplete. Increase days range or reduce granularity."
+                    )
 
             if not results_by_time:
                 return None, "No cost data returned by AWS Cost Explorer for specified period."
@@ -192,7 +201,15 @@ class AWSCostExplorerService:
                 is_simulated=False,
             )
 
-            return anomaly, None
+            warning = None
+            if pagination_cap_hit:
+                warning = (
+                    "PARTIAL_DATA: AWS Cost Explorer pagination cap reached (5 pages). "
+                    "Returned cost data covers a subset of the requested period. "
+                    "Reduce the query window or increase the page cap for complete data."
+                )
+
+            return anomaly, warning
 
         except (NoCredentialsError, PartialCredentialsError) as cred_err:
             return None, f"AWS Credentials not configured: {cred_err}"

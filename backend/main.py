@@ -207,7 +207,7 @@ async def analyze_anomaly(
         valid_ids = [s["id"] for s in CostScenarioRegistry.get_all_scenarios()]
         if scenario_id not in valid_ids:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY if hasattr(status, "HTTP_422_UNPROCESSABLE_CONTENT") else 422,
+                status_code=422,
                 detail=f"Invalid scenario_id '{scenario_id}'. Available scenarios: {valid_ids}",
             )
         anomaly = CostScenarioRegistry.generate_scenario_anomaly(scenario_id)
@@ -310,50 +310,65 @@ async def record_approval_decision(
 
 # ------------------------------------------------------------------------------
 # Test-Fixture / Protocol Reference endpoint (POST /v1/systemone)
+# Disabled by default. Enable only with ENABLE_TEST_FIXTURE_ENDPOINT=true
+# in non-production environments (startup validation blocks production use).
 # ------------------------------------------------------------------------------
-@app.post("/v1/systemone", tags=["Strands Decider System One Spec"])
-async def strands_decider_systemone_endpoint(
-    req: SystemOneRequest,
-    response: Response,
-) -> SystemOneResponse:
-    """Reference server implementing the official Strands Decider wire protocol.
+if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
+    @app.post("/v1/systemone", tags=["Strands Decider System One Spec"])
+    async def strands_decider_systemone_endpoint(
+        req: SystemOneRequest,
+        response: Response,
+    ) -> SystemOneResponse:
+        """Reference server implementing the official Strands Decider wire protocol.
 
-    Provides a test-fixture for protocol validation and local tests.
-    Responses are tagged with X-Sentinel-Test-Fixture: true.
-    """
-    response.headers["X-Sentinel-Test-Fixture"] = "true"
-    answers: Dict[str, Any] = {}
-    for q_name, question in req.questions.items():
-        if isinstance(question, ChoiceQuestion):
-            opts = list(question.criteria.keys())
-            state_text = str(req.state).lower()
-            if "critical" in state_text or "spike" in state_text or "unknown" in state_text or "+3" in state_text:
-                choice = "request_approval" if "request_approval" in opts else opts[0]
-                probs = {opt: (0.85 if opt == choice else (0.15 / max(1, len(opts) - 1))) for opt in opts}
-            elif "verified" in state_text or "drift" in state_text:
-                choice = "notify_owner" if "notify_owner" in opts else opts[0]
-                probs = {opt: (0.80 if opt == choice else (0.20 / max(1, len(opts) - 1))) for opt in opts}
+        Provides a test-fixture for protocol validation and local tests.
+        Responses are tagged with X-Sentinel-Test-Fixture: true.
+        Only active when ENABLE_TEST_FIXTURE_ENDPOINT=true (never in production).
+        """
+        response.headers["X-Sentinel-Test-Fixture"] = "true"
+        answers: Dict[str, Any] = {}
+        for q_name, question in req.questions.items():
+            if isinstance(question, ChoiceQuestion):
+                opts = list(question.criteria.keys())
+                state_text = str(req.state).lower()
+                if "critical" in state_text or "spike" in state_text or "unknown" in state_text or "+3" in state_text:
+                    choice = "request_approval" if "request_approval" in opts else opts[0]
+                    probs = {opt: (0.85 if opt == choice else (0.15 / max(1, len(opts) - 1))) for opt in opts}
+                elif "verified" in state_text or "drift" in state_text:
+                    choice = "notify_owner" if "notify_owner" in opts else opts[0]
+                    probs = {opt: (0.80 if opt == choice else (0.20 / max(1, len(opts) - 1))) for opt in opts}
+                else:
+                    choice = "monitor" if "monitor" in opts else opts[0]
+                    probs = {opt: (0.88 if opt == choice else (0.12 / max(1, len(opts) - 1))) for opt in opts}
+
+                conf = derive_confidence(list(probs.values()))
+                answers[q_name] = ChoiceAnswer(
+                    choice=choice,
+                    probabilities=probs,
+                    confidence=conf,
+                )
             else:
-                choice = "monitor" if "monitor" in opts else opts[0]
-                probs = {opt: (0.88 if opt == choice else (0.12 / max(1, len(opts) - 1))) for opt in opts}
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Question type '{question.type}' not supported in this endpoint.",
+                )
 
-            conf = derive_confidence(list(probs.values()))
-            answers[q_name] = ChoiceAnswer(
-                choice=choice,
-                probabilities=probs,
-                confidence=conf,
-            )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Question type '{question.type}' not supported in this endpoint.",
-            )
-
-    return SystemOneResponse(
-        model="StrandsAgents/strands-decider-2B-hobson-v19",
-        answers=answers,
-        usage=Usage(input_tokens=180, output_tokens=0),
-    )
+        return SystemOneResponse(
+            model="StrandsAgents/strands-decider-2B-hobson-v19",
+            answers=answers,
+            usage=Usage(input_tokens=180, output_tokens=0),
+        )
+else:
+    # Register a stub that returns 404 so tests targeting the disabled endpoint get a clear error.
+    @app.post("/v1/systemone", include_in_schema=False)
+    async def strands_decider_systemone_disabled() -> None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "The /v1/systemone test-fixture endpoint is disabled. "
+                "Set ENABLE_TEST_FIXTURE_ENDPOINT=true to activate it in non-production environments."
+            ),
+        )
 
 
 # ------------------------------------------------------------------------------
