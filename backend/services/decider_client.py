@@ -104,9 +104,14 @@ class DeciderClient:
             )
             provider_label = "strands-decider-2b-http"
         elif self.provider == "inprocess":
-            choice, probs, confidence, model_name, is_err, err_msg = self._call_inprocess_decider(
-                compact_state_str, question
-            )
+            # Disabled — raises NotImplementedError; caught as provider error below
+            try:
+                choice, probs, confidence, model_name, is_err, err_msg = self._call_inprocess_decider(
+                    compact_state_str, question
+                )
+            except NotImplementedError as exc:
+                choice, probs, confidence, model_name = "request_approval", {}, 0.0, self.model_id
+                is_err, err_msg = True, str(exc)
             provider_label = "strands-decider-2b-inprocess"
         else:
             choice, probs, confidence, model_name, is_err, err_msg = self._call_mock_decider(
@@ -115,6 +120,10 @@ class DeciderClient:
             provider_label = "mock-simulated"
 
         latency_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+
+        # Preserve raw model output before any policy override
+        raw_model_action: Optional[str] = choice if not is_err else None
+        raw_model_confidence: Optional[float] = round(confidence, 4) if not is_err else None
 
         # Configurable low-confidence & safety fallback check
         is_fallback = False
@@ -145,6 +154,8 @@ class DeciderClient:
             timestamp=timestamp,
             action=final_action,
             confidence=round(confidence, 4),
+            raw_model_action=raw_model_action,
+            raw_model_confidence=raw_model_confidence,
             probabilities={k: round(v, 4) for k, v in probs.items()},
             latency_ms=latency_ms,
             model_id=model_name,
@@ -162,7 +173,10 @@ class DeciderClient:
     async def _call_http_decider(
         self, state_str: str, question: ChoiceQuestion
     ) -> Tuple[DeciderAction, Dict[str, float], float, str, bool, Optional[str]]:
-        """Call real Strands Decider 2B served over HTTP."""
+        """Call real Strands Decider 2B served over HTTP with strict response validation."""
+        import math
+
+        ALLOWED_ACTIONS: set = {"monitor", "notify_owner", "request_approval"}
         request_payload = SystemOneRequest(
             state=state_str,
             model=self.model_id,
@@ -180,17 +194,46 @@ class DeciderClient:
                 data = resp.json()
                 parsed = SystemOneResponse.model_validate(data)
                 answer = parsed.answers.get("operational_response")
-                if isinstance(answer, ChoiceAnswer):
-                    return (
-                        answer.choice,  # type: ignore
-                        answer.probabilities,
-                        answer.confidence,
-                        parsed.model,
-                        False,
-                        None,
-                    )
-                else:
+                if not isinstance(answer, ChoiceAnswer):
                     return "request_approval", {}, 0.0, self.model_id, True, "Unexpected answer type from Decider"
+
+                # --- Strict validation of model response ---
+                action = answer.choice
+                if action not in ALLOWED_ACTIONS:
+                    return "request_approval", {}, 0.0, self.model_id, True, (
+                        f"Decider returned unrecognised action '{action}'; must be one of {ALLOWED_ACTIONS}"
+                    )
+
+                probs = answer.probabilities
+                if not isinstance(probs, dict) or not probs:
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider returned empty/invalid probabilities"
+
+                for k, v in probs.items():
+                    if not isinstance(v, (int, float)) or math.isnan(v) or math.isinf(v) or not (0.0 <= v <= 1.0):
+                        return "request_approval", {}, 0.0, self.model_id, True, (
+                            f"Decider probability for '{k}' is out of range or non-finite: {v}"
+                        )
+
+                prob_sum = sum(probs.values())
+                if abs(prob_sum - 1.0) > 0.05:
+                    return "request_approval", {}, 0.0, self.model_id, True, (
+                        f"Decider probabilities do not sum to 1.0 (sum={prob_sum:.4f})"
+                    )
+
+                conf = answer.confidence
+                if math.isnan(conf) or math.isinf(conf) or not (0.0 <= conf <= 1.0):
+                    return "request_approval", {}, 0.0, self.model_id, True, (
+                        f"Decider confidence is out of range or non-finite: {conf}"
+                    )
+
+                return (
+                    action,  # type: ignore[return-value]
+                    probs,
+                    conf,
+                    parsed.model,
+                    False,
+                    None,
+                )
         except Exception as exc:
             logger.error("HTTP Decider invocation failed: %s", exc)
             return "request_approval", {"monitor": 0.33, "notify_owner": 0.33, "request_approval": 0.34}, 0.0, self.model_id, True, str(exc)
@@ -198,13 +241,21 @@ class DeciderClient:
     def _call_inprocess_decider(
         self, state_str: str, question: ChoiceQuestion
     ) -> Tuple[DeciderAction, Dict[str, float], float, str, bool, Optional[str]]:
-        """Call in-process Strands Decider model via PyTorch if loaded."""
-        try:
-            # Check if transformers/torch can load model
-            from strands_decider.modeling import StrandsDeciderModel
-            return "request_approval", {"monitor": 0.1, "notify_owner": 0.2, "request_approval": 0.7}, 0.75, self.model_id, False, None
-        except Exception as exc:
-            return "request_approval", {}, 0.0, self.model_id, True, f"In-process load failed: {exc}"
+        """In-process Strands Decider path — NOT a real inference path.
+
+        This method exists as a stub. The in-process provider is disabled because
+        returning hard-coded probabilities here would misrepresent them as real
+        model inference.  To use the real Strands Decider 2B, run:
+
+            strands-decider serve --model StrandsAgents/strands-decider-2B-hobson-v19
+
+        then set DECIDER_PROVIDER=http and STRANDS_DECIDER_URL=http://127.0.0.1:8080/v1/systemone.
+        """
+        raise NotImplementedError(
+            "The 'inprocess' provider is disabled. It cannot perform real model inference without "
+            "loaded weights and PyTorch. Use DECIDER_PROVIDER=http and point STRANDS_DECIDER_URL "
+            "to a running 'strands-decider serve' instance instead."
+        )
 
     def _call_mock_decider(
         self, anomaly: CostAnomaly, state: DeciderNormalizedState
@@ -258,6 +309,9 @@ class DeciderClient:
             )
         elif action == "notify_owner":
             recipient = anomaly.owner if anomaly.owner != "unknown" else "cloud-ops-triage@company.internal"
+            from .notification_service import NotificationService
+            notif_service = NotificationService()
+            notif_res = notif_service.dispatch_anomaly_notification(anomaly, recipient)
             return (
                 "DISPATCH_OWNER_NOTIFICATION",
                 {
@@ -265,12 +319,13 @@ class DeciderClient:
                     "subject": f"[CloudCost Sentinel] Spend Anomaly in {anomaly.service} ({anomaly.environment})",
                     "delta_amount": anomaly.metrics.delta_amount,
                     "delta_percentage": anomaly.metrics.delta_percentage,
-                    "notification_status": "queued_simulated",
+                    "notification_status": notif_res.status,
+                    "notification_provider": notif_res.provider,
                     "requires_manual_approval": False,
                 },
             )
         else:  # "request_approval"
-            # Calculate estimated monthly savings from remediation
+            # Rough modelled estimate based on 30 days and 85% remediation efficiency
             daily_excess = max(0.0, anomaly.metrics.delta_amount)
             est_monthly_savings = round(daily_excess * 30.0 * 0.85, 2)  # 85% remediation efficiency
             return (
@@ -280,6 +335,7 @@ class DeciderClient:
                     "service": anomaly.service,
                     "environment": anomaly.environment,
                     "estimated_monthly_savings": est_monthly_savings,
+                    "savings_model_assumptions": "Rough modelled estimate based on 30-day projected excess spend at 85% remediation efficiency.",
                     "safety_override": is_fallback,
                     "override_reason": fallback_reason,
                     "remediation_type": "SCALE_OR_RIGHTSIZE_RESOURCES",

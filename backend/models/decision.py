@@ -50,14 +50,17 @@ class DeciderNormalizedState(BaseModel):
 class DeciderResponseTrace(BaseModel):
     decision_id: str
     timestamp: str
-    action: DeciderAction
-    confidence: float
+    action: DeciderAction  # effective action (may differ from raw_model_action when safety fallback applied)
+    confidence: float       # effective confidence
     probabilities: Dict[str, float]
     latency_ms: float
     model_id: str
-    provider: str  # "strands-decider-2b-live" | "strands-decider-http" | "mock-simulated"
+    provider: str  # "strands-decider-2b-http" | "strands-decider-2b-inprocess" | "mock-simulated"
     is_fallback: bool = False
     fallback_reason: Optional[str] = None
+    # Raw model output — preserved separately so the audit log never conflates model output with policy override
+    raw_model_action: Optional[DeciderAction] = None    # what the model actually chose
+    raw_model_confidence: Optional[float] = None        # what the model actually returned
     question: DeciderQuestionSpec
     normalized_state: str
     executed_action: str
