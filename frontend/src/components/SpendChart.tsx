@@ -23,10 +23,10 @@ export const SpendChart: React.FC<SpendChartProps> = ({ data, baseline, service 
   return (
     <div className="panel-card" style={{ height: "360px", display: "flex", flexDirection: "column" }}>
       <div className="panel-header">
-        <div className="panel-title">
+        <h2 className="panel-title">
           <span>Spend Telemetry & Anomaly Trajectory</span>
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>({service})</span>
-        </div>
+        </h2>
         <div style={{ display: "flex", gap: "1rem", fontSize: "0.75rem" }}>
           <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
             <span style={{ width: 10, height: 10, background: "#06b6d4", borderRadius: 2 }} />

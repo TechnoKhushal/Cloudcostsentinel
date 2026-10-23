@@ -24,6 +24,15 @@ def default_database_path() -> str:
     return "backend/data/sentinel.db"
 
 
+def normalize_cors_origin(origin: str) -> str:
+    """Normalize whitespace and a root trailing slash, without hiding URL paths."""
+    candidate = origin.strip()
+    parsed = urlsplit(candidate)
+    if parsed.path == "/" and not parsed.query and not parsed.fragment:
+        return parsed._replace(path="").geturl()
+    return candidate
+
+
 def parse_cors_origins(raw: str) -> List[str]:
     """Safely parse CORS origins from JSON list or comma-separated string."""
     raw = raw.strip()
@@ -33,12 +42,12 @@ def parse_cors_origins(raw: str) -> List[str]:
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
+                return [normalize_cors_origin(str(item)) for item in parsed if str(item).strip()]
         except Exception:
             pass
     # Fallback to comma-separated
     cleaned = raw.strip("[]'\"")
-    return [item.strip().strip("'\"") for item in cleaned.split(",") if item.strip().strip("'\"")]
+    return [normalize_cors_origin(item.strip().strip("'\"")) for item in cleaned.split(",") if item.strip().strip("'\"")]
 
 
 class Settings(BaseModel):

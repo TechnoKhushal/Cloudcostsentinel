@@ -6,6 +6,8 @@ declare module "lucide-react" {
     strokeWidth?: number | string;
   }
   export const ShieldAlert: React.FC<IconProps>;
+  export const Activity: React.FC<IconProps>;
+  export const RefreshCw: React.FC<IconProps>;
   export const Cpu: React.FC<IconProps>;
   export const Sparkles: React.FC<IconProps>;
   export const Cloud: React.FC<IconProps>;

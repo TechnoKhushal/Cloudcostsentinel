@@ -424,6 +424,12 @@ def test_cors_origins_parsing():
 
     vercel_origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
     assert parse_cors_origins(vercel_origin) == [vercel_origin]
+    assert parse_cors_origins("  https://app.example.com/ , https://other.example.com  ") == [
+        "https://app.example.com", "https://other.example.com"
+    ]
+    assert parse_cors_origins('["https://app.example.com/", " https://other.example.com "]') == [
+        "https://app.example.com", "https://other.example.com"
+    ]
 
 
 def test_database_is_simulated_preservation(tmp_path):
