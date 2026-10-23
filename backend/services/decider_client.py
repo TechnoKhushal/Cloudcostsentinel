@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -8,13 +7,6 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
-from strands_decider.schema import (
-    ChoiceAnswer,
-    ChoiceQuestion,
-    SystemOneRequest,
-    SystemOneResponse,
-    derive_confidence,
-)
 
 from ..config import settings
 from ..models.cost import CostAnomaly
@@ -24,6 +16,7 @@ from ..models.decision import (
     DeciderQuestionSpec,
     DeciderResponseTrace,
 )
+from .confidence import mock_confidence
 
 logger = logging.getLogger("cloudcost_sentinel.decider")
 
@@ -69,14 +62,14 @@ class DeciderClient:
             uncertainty_flag=anomaly.metrics.uncertainty_flag,
         )
 
-    def build_question(self) -> ChoiceQuestion:
-        """Construct the exact typed Decider 2B ChoiceQuestion."""
+    def build_question(self) -> Dict[str, Any]:
+        """Build the public HTTP wire representation for a choice question."""
         spec = DeciderQuestionSpec()
-        return ChoiceQuestion(
-            type="choice",
-            instructions=spec.instructions,
-            criteria=spec.criteria,
-        )
+        return {
+            "type": "choice",
+            "instructions": spec.instructions,
+            "criteria": spec.criteria,
+        }
 
     async def decide(self, anomaly: CostAnomaly) -> DeciderResponseTrace:
         """Execute the signature decision on the main execution path.
@@ -171,40 +164,52 @@ class DeciderClient:
         return trace
 
     async def _call_http_decider(
-        self, state_str: str, question: ChoiceQuestion
+        self, state_str: str, question: Dict[str, Any]
     ) -> Tuple[DeciderAction, Dict[str, float], float, str, bool, Optional[str]]:
         """Call real Strands Decider 2B served over HTTP with strict response validation."""
         import math
 
         ALLOWED_ACTIONS: set = {"monitor", "notify_owner", "request_approval"}
-        request_payload = SystemOneRequest(
-            state=state_str,
-            model=self.model_id,
-            questions={"operational_response": question},
-        )
+        request_payload = {
+            "state": state_str,
+            "model": self.model_id,
+            "questions": {"operational_response": question},
+        }
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     self.endpoint_url,
-                    json=request_payload.model_dump(),
+                    json=request_payload,
                     headers={"Content-Type": "application/json"},
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                parsed = SystemOneResponse.model_validate(data)
-                answer = parsed.answers.get("operational_response")
-                if not isinstance(answer, ChoiceAnswer):
+                if (
+                    not isinstance(data, dict)
+                    or not isinstance(data.get("model"), str)
+                    or not isinstance(data.get("answers"), dict)
+                    or not isinstance(data.get("usage"), dict)
+                ):
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider returned an invalid System One response"
+                usage = data["usage"]
+                if any(
+                    not isinstance(usage.get(field), int) or usage[field] < 0
+                    for field in ("input_tokens", "output_tokens")
+                ):
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider returned invalid token usage"
+                answer = data["answers"].get("operational_response")
+                if not isinstance(answer, dict) or answer.get("type") != "choice":
                     return "request_approval", {}, 0.0, self.model_id, True, "Unexpected answer type from Decider"
 
                 # --- Strict validation of model response ---
-                action = answer.choice
-                if action not in ALLOWED_ACTIONS:
+                action = answer.get("choice")
+                if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
                     return "request_approval", {}, 0.0, self.model_id, True, (
                         f"Decider returned unrecognised action '{action}'; must be one of {ALLOWED_ACTIONS}"
                     )
 
-                probs = answer.probabilities
+                probs = answer.get("probabilities")
                 if not isinstance(probs, dict) or not probs:
                     return "request_approval", {}, 0.0, self.model_id, True, "Decider returned empty/invalid probabilities"
 
@@ -220,7 +225,9 @@ class DeciderClient:
                         f"Decider probabilities do not sum to 1.0 (sum={prob_sum:.4f})"
                     )
 
-                conf = answer.confidence
+                conf = answer.get("confidence")
+                if not isinstance(conf, (int, float)):
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider confidence is missing or invalid"
                 if math.isnan(conf) or math.isinf(conf) or not (0.0 <= conf <= 1.0):
                     return "request_approval", {}, 0.0, self.model_id, True, (
                         f"Decider confidence is out of range or non-finite: {conf}"
@@ -230,7 +237,7 @@ class DeciderClient:
                     action,  # type: ignore[return-value]
                     probs,
                     conf,
-                    parsed.model,
+                    data["model"],
                     False,
                     None,
                 )
@@ -239,7 +246,7 @@ class DeciderClient:
             return "request_approval", {"monitor": 0.33, "notify_owner": 0.33, "request_approval": 0.34}, 0.0, self.model_id, True, str(exc)
 
     def _call_inprocess_decider(
-        self, state_str: str, question: ChoiceQuestion
+        self, state_str: str, question: Dict[str, Any]
     ) -> Tuple[DeciderAction, Dict[str, float], float, str, bool, Optional[str]]:
         """In-process Strands Decider path — NOT a real inference path.
 
@@ -263,13 +270,13 @@ class DeciderClient:
         """Deterministic, calibrated mock evaluator for tests and credential-free demos.
 
         Labels: provider="mock-simulated", model="demo-policy-evaluator-v1".
-        Calibrated probabilities are generated from domain criteria and passed through
-        the official Strands `derive_confidence` formula: (N * p_max - 1) / (N - 1).
+        Calibrated probabilities use a normalized top-choice score relative to a uniform
+        distribution: (N * p_max - 1) / (N - 1).
         """
         # If measurement is uncertain or sparse data, create low confidence distribution below safety threshold
         if state.uncertainty_flag:
             probs = {"monitor": 0.34, "notify_owner": 0.33, "request_approval": 0.33}
-            conf = derive_confidence(list(probs.values()))  # ~ 0.015 (below 0.65 threshold)
+            conf = mock_confidence(probs.values())  # 0.34, below the 0.65 threshold
             return "request_approval", probs, conf, "demo-policy-evaluator-v1", False, None
 
         # Critical service with high spend spike (+50% or +$400/day) or unassigned owner -> request_approval
@@ -287,7 +294,7 @@ class DeciderClient:
             probs = {"monitor": 0.86, "notify_owner": 0.10, "request_approval": 0.04}
             choice = "monitor"
 
-        conf = derive_confidence(list(probs.values()))
+        conf = mock_confidence(probs.values())
         return choice, probs, conf, "demo-policy-evaluator-v1", False, None
 
     def _route_operational_response(

@@ -35,7 +35,7 @@ To connect CloudCost Sentinel to the genuine Strands Decider 2B model:
 
 1. In a dedicated Python environment with PyTorch and CUDA/MPS:
    ```bash
-   pip install strands-decider
+   pip install -r requirements-decider-model.txt
    strands-decider serve --model StrandsAgents/strands-decider-2B-hobson-v19 --port 8080
    ```
 2. In `.env`:

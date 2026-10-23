@@ -1,5 +1,4 @@
-import React from "react";
-import { Play, Flame, RotateCcw, AlertCircle } from "lucide-react";
+import { AlertCircle, Flame, Play, RotateCcw } from "lucide-react";
 import type { Scenario } from "../types";
 
 interface ScenarioControlsProps {
@@ -10,79 +9,26 @@ interface ScenarioControlsProps {
   onSimulateSpike: () => void;
   onReset: () => void;
   loading: boolean;
+  scenariosError?: string | null;
+  onRetryScenarios?: () => void;
 }
 
-export const ScenarioControls: React.FC<ScenarioControlsProps> = ({
-  scenarios,
-  selectedScenarioId,
-  onSelectScenario,
-  onRunAnalysis,
-  onSimulateSpike,
-  onReset,
-  loading,
-}) => {
-  return (
-    <>
-      <div className="simulated-banner">
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <AlertCircle size={16} color="#f59e0b" />
-          <span>
-            <strong>SIMULATED DATA / SAFE DEMO ENVIRONMENT:</strong> Telemetry values and scenarios are deterministic for reproducible evaluation.
-          </span>
-        </div>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          Tags: #strands-decider-2b #policy
-        </span>
+export const ScenarioControls = ({ scenarios, selectedScenarioId, onSelectScenario, onRunAnalysis, onSimulateSpike, onReset, loading, scenariosError, onRetryScenarios }: ScenarioControlsProps) => (
+  <>
+    <div className="simulated-banner"><div><AlertCircle size={16} aria-hidden="true" /><span><strong>SYNTHETIC SCENARIOS</strong> · Reproducible sample telemetry. No real cloud operations run.</span></div><span className="banner-meta">#finops · #policy-review</span></div>
+    <section className="scenario-toolbar" aria-label="Scenario analysis controls">
+      <div className="scenario-select-group">
+        <label htmlFor="scenario-select">Scenario</label>
+        <select id="scenario-select" className="select-input" value={selectedScenarioId} onChange={(event) => onSelectScenario(event.target.value)} disabled={loading || scenarios.length === 0} aria-describedby={scenariosError ? "scenario-error" : undefined}>
+          {scenarios.length === 0 ? <option value="">{loading ? "Loading scenarios…" : "Scenarios unavailable"}</option> : scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.name} · {scenario.service}</option>)}
+        </select>
       </div>
-
-      <div className="scenario-toolbar">
-        <div className="scenario-select-group">
-          <label style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-secondary)" }}>
-            Scenario:
-          </label>
-          <select
-            className="select-input"
-            value={selectedScenarioId}
-            onChange={(e) => onSelectScenario(e.target.value)}
-            disabled={loading}
-          >
-            {scenarios.map((sc) => (
-              <option key={sc.id} value={sc.id}>
-                {sc.name} ({sc.service})
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="toolbar-buttons">
-          <button
-            className="btn btn-spike"
-            onClick={onSimulateSpike}
-            disabled={loading}
-          >
-            <Flame size={15} />
-            Simulate Compute Spike
-          </button>
-
-          <button
-            className="btn btn-primary"
-            onClick={onRunAnalysis}
-            disabled={loading}
-          >
-            <Play size={15} />
-            {loading ? "Analyzing..." : "Re-run Analysis"}
-          </button>
-
-          <button
-            className="btn btn-secondary"
-            onClick={onReset}
-            disabled={loading}
-          >
-            <RotateCcw size={15} />
-            Reset Demo
-          </button>
-        </div>
+      <div className="toolbar-buttons">
+        <button type="button" className="btn btn-spike" onClick={onSimulateSpike} disabled={loading || !scenarios.some((scenario) => scenario.id === "compute_spike")}><Flame size={15} aria-hidden="true" />Compute spike</button>
+        <button type="button" className="btn btn-primary" onClick={onRunAnalysis} disabled={loading || scenarios.length === 0}><Play size={15} aria-hidden="true" />{loading ? "Analyzing…" : "Run analysis"}</button>
+        <button type="button" className="btn btn-secondary" onClick={onReset} disabled={loading || !scenarios.some((scenario) => scenario.id === "stable_baseline")}><RotateCcw size={15} aria-hidden="true" />Stable baseline</button>
       </div>
-    </>
-  );
-};
+      {scenariosError && <div id="scenario-error" className="scenario-error" role="alert"><span>Scenarios could not be loaded: {scenariosError}</span><button type="button" className="btn btn-secondary btn-sm" onClick={onRetryScenarios} disabled={loading}>Retry scenario list</button></div>}
+    </section>
+  </>
+);

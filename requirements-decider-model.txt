@@ -1,0 +1,4 @@
+# Full standalone Strands Decider model serving runtime.
+# This installs PyTorch, Transformers, PEFT, and related model dependencies.
+# Do not use this file for the synthetic API demo; use requirements.txt instead.
+strands-decider==0.2.0

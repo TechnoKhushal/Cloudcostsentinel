@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 import pytest
 import pytest_asyncio
@@ -9,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from backend.config import Settings, parse_cors_origins, settings
 from backend.database.db import DatabaseRepository, ApprovalConflictError
-from backend.main import app, db
+from backend.main import app, db, lifespan
 from backend.models.approval import ApprovalItem
 from backend.models.cost import CostAnomaly, SpendMetrics
 from backend.services.cost_analyzer import calculate_spend_metrics, CostScenarioRegistry
@@ -219,6 +223,54 @@ async def test_api_health_endpoint():
         assert "auth" in data
 
 
+def test_demo_app_imports_when_strands_decider_package_is_absent():
+    """Render's mock/demo runtime must not need the separate model-serving package."""
+    script = r'''
+import importlib.abc
+import sys
+
+class BlockStrandsDecider(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "strands_decider" or fullname.startswith("strands_decider."):
+            raise ModuleNotFoundError("simulated missing optional strands-decider package")
+        return None
+
+sys.meta_path.insert(0, BlockStrandsDecider())
+from backend.config import Settings
+Settings(
+    ENVIRONMENT="demo", AUTH_ENABLED=False,
+    CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
+    DECIDER_PROVIDER="mock", BEDROCK_PROVIDER="mock",
+    AWS_COST_EXPLORER_ENABLED=False, NOTIFICATION_PROVIDER="disabled",
+).validate_startup()
+Settings(
+    ENVIRONMENT="development", DECIDER_PROVIDER="http", PORT=8000,
+    STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
+).validate_startup()
+from backend.services.decider_client import DeciderClient
+assert DeciderClient(provider="http").build_question()["type"] == "choice"
+import backend.main
+print("import-ok")
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "import-ok" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_api_root_returns_service_and_liveness_pointer():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/")
+    assert resp.status_code == 200
+    assert resp.json() == {"service": "CloudCost Sentinel API", "health": "/api/health/live"}
+
+
 @pytest.mark.asyncio
 async def test_api_scenarios_endpoint():
     transport = ASGITransport(app=app)
@@ -370,6 +422,15 @@ def test_cors_origins_parsing():
     assert len(parsed_csv) == 3
     assert "https://app.example.internal" in parsed_csv
 
+    vercel_origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
+    assert parse_cors_origins(vercel_origin) == [vercel_origin]
+    assert parse_cors_origins("  https://app.example.com/ , https://other.example.com  ") == [
+        "https://app.example.com", "https://other.example.com"
+    ]
+    assert parse_cors_origins('["https://app.example.com/", " https://other.example.com "]') == [
+        "https://app.example.com", "https://other.example.com"
+    ]
+
 
 def test_database_is_simulated_preservation(tmp_path):
     test_db_path = str(tmp_path / "test_sentinel.db")
@@ -399,6 +460,87 @@ def test_database_is_simulated_preservation(tmp_path):
     updated = repo.update_approval_status("appr-live-001", "approved", "admin@company.internal")
     assert updated is not None
     assert updated.is_simulated is False
+
+
+def test_database_initializes_missing_parent_when_writable(tmp_path):
+    database_path = tmp_path / "nested" / "sqlite" / "sentinel.db"
+    repo = DatabaseRepository(str(database_path))
+    assert not database_path.parent.exists()
+
+    repo.initialize()
+
+    assert database_path.parent.is_dir()
+    assert database_path.is_file()
+    assert repo.check_ready() is True
+
+
+def test_database_initialization_propagates_permission_error(tmp_path, monkeypatch):
+    repo = DatabaseRepository(str(tmp_path / "not-created" / "sentinel.db"))
+
+    def deny_directory_creation(path, exist_ok=False):
+        raise PermissionError("simulated read-only database directory")
+
+    monkeypatch.setattr("backend.database.db.os.makedirs", deny_directory_creation)
+    with pytest.raises(PermissionError, match="read-only"):
+        repo.initialize()
+    assert repo._initialized is False
+
+
+def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephemeral(monkeypatch, tmp_path):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("ENVIRONMENT", "demo")
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("CORS_ORIGINS", "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app")
+    monkeypatch.setenv("DECIDER_PROVIDER", "mock")
+    monkeypatch.setenv("BEDROCK_PROVIDER", "mock")
+    monkeypatch.setenv("AWS_COST_EXPLORER_ENABLED", "false")
+    monkeypatch.setenv("NOTIFICATION_PROVIDER", "disabled")
+    monkeypatch.delenv("DATABASE_PATH", raising=False)
+
+    render_demo = Settings()
+    assert render_demo.DATABASE_PATH == "/tmp/cloudcost-sentinel.db"
+    render_demo.validate_startup()
+
+    configured_path = str(tmp_path / "explicit" / "sentinel.db")
+    monkeypatch.setenv("DATABASE_PATH", configured_path)
+    assert Settings().DATABASE_PATH == configured_path
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    production_path = str(tmp_path / "production" / "sentinel.db")
+    monkeypatch.setenv("DATABASE_PATH", production_path)
+    assert Settings().DATABASE_PATH == production_path
+
+    with pytest.raises(ValueError, match="outside temporary storage"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.example"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://issuer.example/jwks.json",
+            AUTH_ISSUER="https://issuer.example",
+            AUTH_AUDIENCE="sentinel-api",
+            DECIDER_PROVIDER="http",
+            STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
+            BEDROCK_PROVIDER="bedrock",
+            DATABASE_PATH=str(Path(tempfile.gettempdir()) / "sentinel-prod.db"),
+        ).validate_startup()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_reports_actionable_database_permission_error(monkeypatch, tmp_path):
+    import unittest.mock
+
+    monkeypatch.delenv("RENDER", raising=False)
+    database_path = tmp_path / "denied" / "sentinel.db"
+    failing_repo = DatabaseRepository(str(database_path))
+    monkeypatch.setattr("backend.main.db", failing_repo)
+    monkeypatch.setattr(settings, "DATABASE_PATH", str(database_path))
+    with unittest.mock.patch.object(failing_repo, "initialize", side_effect=PermissionError("read-only")):
+        with pytest.raises(RuntimeError, match="SQLite could not initialize directory") as exc_info:
+            async with lifespan(app):
+                pass
+    assert str(database_path.parent) in str(exc_info.value)
+    assert "DATABASE_PATH=/tmp/cloudcost-sentinel.db" in str(exc_info.value)
 
 
 def test_concurrent_approval_transition_has_exactly_one_winner(tmp_path):
@@ -489,6 +631,31 @@ def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
             AUTH_ENABLED=False,
             CORS_ORIGINS=["*"],
         ).validate_startup()
+
+    with pytest.raises(ValueError, match="exact HTTPS origins"):
+        Settings(
+            ENVIRONMENT="demo",
+            AUTH_ENABLED=False,
+            CORS_ORIGINS=["https://sentinel.example/"],
+        ).validate_startup()
+
+
+def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypatch):
+    monkeypatch.setenv("RENDER", "true")
+    with pytest.raises(ValueError, match="explicit ENVIRONMENT=demo or ENVIRONMENT=production"):
+        Settings(ENVIRONMENT="development").validate_startup()
+
+    demo = Settings(
+        ENVIRONMENT="demo",
+        AUTH_ENABLED=False,
+        CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
+        DECIDER_PROVIDER="mock",
+        BEDROCK_PROVIDER="mock",
+        AWS_COST_EXPLORER_ENABLED=False,
+        NOTIFICATION_PROVIDER="disabled",
+        DATABASE_PATH="/var/data/sentinel.db",
+    )
+    demo.validate_startup()
 
 
 def test_production_rejects_sqlite_database_url():
@@ -697,7 +864,45 @@ async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
     assert allowed.status_code == 200
     assert allowed.headers.get("access-control-allow-origin") == configured_origin
     assert allowed.headers.get("access-control-allow-credentials") == "true"
+    assert "POST" in allowed.headers.get("access-control-allow-methods", "")
+    assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
     assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_deployed_vercel_origin():
+    origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
+    prior_origins = list(settings.CORS_ORIGINS)
+    settings.CORS_ORIGINS[:] = list(dict.fromkeys([*prior_origins, origin]))
+    app.middleware_stack = None
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            allowed = await ac.options(
+                "/api/demo/scenarios",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            rejected = await ac.options(
+                "/api/demo/scenarios",
+                headers={
+                    "Origin": "https://unapproved.example",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+        assert allowed.status_code == 200
+        assert allowed.headers.get("access-control-allow-origin") == origin
+        assert "GET" in allowed.headers.get("access-control-allow-methods", "")
+        assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
+        assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
+        assert "access-control-allow-origin" not in rejected.headers
+    finally:
+        settings.CORS_ORIGINS[:] = prior_origins
+        app.middleware_stack = None
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlsplit
 from dotenv import load_dotenv
@@ -10,6 +12,25 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 logger = logging.getLogger("cloudcost_sentinel.config")
+
+
+def default_database_path() -> str:
+    """Choose local storage; Render demo defaults to explicitly ephemeral storage."""
+    configured = os.getenv("DATABASE_PATH")
+    if configured is not None:
+        return configured
+    if os.getenv("RENDER", "").lower() == "true" and os.getenv("ENVIRONMENT") == "demo":
+        return "/tmp/cloudcost-sentinel.db"
+    return "backend/data/sentinel.db"
+
+
+def normalize_cors_origin(origin: str) -> str:
+    """Normalize whitespace and a root trailing slash, without hiding URL paths."""
+    candidate = origin.strip()
+    parsed = urlsplit(candidate)
+    if parsed.path == "/" and not parsed.query and not parsed.fragment:
+        return parsed._replace(path="").geturl()
+    return candidate
 
 
 def parse_cors_origins(raw: str) -> List[str]:
@@ -21,12 +42,12 @@ def parse_cors_origins(raw: str) -> List[str]:
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
+                return [normalize_cors_origin(str(item)) for item in parsed if str(item).strip()]
         except Exception:
             pass
     # Fallback to comma-separated
     cleaned = raw.strip("[]'\"")
-    return [item.strip().strip("'\"") for item in cleaned.split(",") if item.strip().strip("'\"")]
+    return [normalize_cors_origin(item.strip().strip("'\"")) for item in cleaned.split(",") if item.strip().strip("'\"")]
 
 
 class Settings(BaseModel):
@@ -92,7 +113,7 @@ class Settings(BaseModel):
     )
 
     # Storage
-    DATABASE_PATH: str = Field(default_factory=lambda: os.getenv("DATABASE_PATH", "backend/data/sentinel.db"))
+    DATABASE_PATH: str = Field(default_factory=default_database_path)
     DATABASE_URL: Optional[str] = Field(default_factory=lambda: os.getenv("DATABASE_URL"))
 
     # Test fixture endpoint — disabled by default; never enable in production
@@ -102,11 +123,17 @@ class Settings(BaseModel):
 
     def validate_startup(self) -> None:
         """Validate startup configuration to prevent unsafe states."""
+        if not self.DATABASE_PATH.strip():
+            raise ValueError("DATABASE_PATH must name a non-empty SQLite file path.")
         if self.ENVIRONMENT not in {"development", "demo", "production"}:
             raise ValueError("ENVIRONMENT must be development, demo, or production.")
-        if self.ENVIRONMENT == "development" and os.getenv("RENDER"):
-            raise ValueError("Render deployment must explicitly select ENVIRONMENT=demo or ENVIRONMENT=production.")
-        if os.getenv("RENDER") and self.HOST != "0.0.0.0":
+        is_render = os.getenv("RENDER", "").lower() == "true"
+        if self.ENVIRONMENT == "development" and is_render:
+            raise ValueError(
+                "Render requires an explicit ENVIRONMENT=demo or ENVIRONMENT=production. "
+                "Set ENVIRONMENT=demo for the public synthetic demo; development mode is refused on Render."
+            )
+        if is_render and self.HOST != "0.0.0.0":
             raise ValueError("Render deployment requires HOST=0.0.0.0.")
         if not (0.0 < self.DECIDER_MIN_CONFIDENCE <= 1.0):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
@@ -164,9 +191,16 @@ class Settings(BaseModel):
                     "Production startup refused: mock providers are prohibited; use ENVIRONMENT=demo for simulated providers."
                 )
 
-            if self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH):
+            database_path = Path(self.DATABASE_PATH).expanduser()
+            temporary_dir = Path(tempfile.gettempdir()).resolve()
+            try:
+                is_temporary = database_path.resolve().is_relative_to(temporary_dir)
+            except OSError:
+                is_temporary = False
+            if self.DATABASE_PATH == "backend/data/sentinel.db" or not database_path.is_absolute() or is_temporary:
                 raise ValueError(
-                    "Production startup requires DATABASE_PATH to be an explicit absolute path on a persistent disk."
+                    "Production startup requires DATABASE_PATH to be an absolute path outside temporary storage "
+                    "on a verified persistent disk."
                 )
 
         if self.ENVIRONMENT == "demo":
@@ -181,10 +215,11 @@ class Settings(BaseModel):
                 raise ValueError("ENVIRONMENT=demo allows only disabled or simulated notifications.")
             if self.ENABLE_TEST_FIXTURE_ENDPOINT:
                 raise ValueError("ENVIRONMENT=demo must not enable the Decider test-fixture endpoint.")
-            if os.getenv("RENDER") and (
-                self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH)
-            ):
-                raise ValueError("Render demo requires DATABASE_PATH on an explicitly mounted persistent disk.")
+            if is_render and not os.path.isabs(self.DATABASE_PATH):
+                raise ValueError(
+                    "Render demo DATABASE_PATH must be absolute. Use /tmp/cloudcost-sentinel.db for ephemeral demo storage "
+                    "or configure an explicitly mounted writable disk for persistence."
+                )
 
         if self.DECIDER_PROVIDER == "http":
             decider_url = urlsplit(self.STRANDS_DECIDER_URL)
@@ -218,7 +253,7 @@ class Settings(BaseModel):
             if (
                 (parsed.scheme != "https" and not is_local_demo_origin)
                 or not parsed.netloc
-                or parsed.path not in ("", "/")
+                or parsed.path != ""
                 or parsed.query
                 or parsed.fragment
                 or parsed.username

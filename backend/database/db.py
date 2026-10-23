@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from threading import Lock
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
@@ -10,7 +11,6 @@ from ..models.cost import CostAnomaly
 from ..models.decision import DeciderResponseTrace
 from ..models.approval import ApprovalItem
 from ..models.report import BedrockReport
-
 
 class ApprovalConflictError(Exception):
     """Raised when an approval that is already reviewed attempts another transition."""
@@ -20,20 +20,34 @@ class ApprovalConflictError(Exception):
 class DatabaseRepository:
     def __init__(self, db_path: str = "backend/data/sentinel.db"):
         self.db_path = db_path
-        dir_name = os.path.dirname(self.db_path)
-        if dir_name:
-            os.makedirs(dir_name, exist_ok=True)
-        self._init_tables()
+        self._initialized = False
+        self._initialize_lock = Lock()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def initialize(self) -> None:
+        """Create the parent directory and schema explicitly, with no constructor I/O."""
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            parent = os.path.dirname(os.path.abspath(self.db_path))
+            os.makedirs(parent, exist_ok=True)
+            self._init_tables()
+            self._initialized = True
+
+    def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         return conn
 
+    def _get_connection(self) -> sqlite3.Connection:
+        self.initialize()
+        return self._connect()
+
     def _init_tables(self) -> None:
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS anomalies (
                     anomaly_id TEXT PRIMARY KEY,
@@ -99,7 +113,7 @@ class DatabaseRepository:
             with self._get_connection() as conn:
                 conn.execute("SELECT 1").fetchone()
             return True
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             return False
 
     def save_anomaly(self, anomaly: CostAnomaly) -> None:

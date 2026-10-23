@@ -35,10 +35,10 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
   return (
     <div className="panel-card">
       <div className="panel-header">
-        <div className="panel-title">
+        <h2 className="panel-title">
           <Cpu size={18} color="#06b6d4" />
           <span>{decision.provider.includes("mock") ? "Simulated Policy Decision" : decision.is_fallback ? "Conservative Safety Fallback" : "Strands Decider — Provider Response"}</span>
-        </div>
+        </h2>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.75rem" }}>
           <span className="status-pill pill-cyan">
             <Clock size={12} />
@@ -119,10 +119,10 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
 
       {/* Collapsible Wire Trace */}
       <div className="trace-accordion">
-        <div className="trace-summary" onClick={() => setShowTrace(!showTrace)}>
+        <button type="button" className="trace-summary" aria-expanded={showTrace} onClick={() => setShowTrace(!showTrace)}>
           <span>Inspect Policy Decision Trace & Normalized State</span>
           {showTrace ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </div>
+        </button>
         {showTrace && (
           <div className="trace-content">
             <div style={{ color: "#38bdf8", marginBottom: "0.35rem" }}>// 1. Exact Typed ChoiceQuestion Spec</div>

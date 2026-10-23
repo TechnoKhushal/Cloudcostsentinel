@@ -2,7 +2,7 @@
 
 **Tags:** `#strands-decider-2b` `#policy`
 
-**Current runtime note:** The default environment uses simulated providers. The Decider and Bedrock boxes below describe optional integration points; `configured_unverified` is not evidence of a live connection. Hosted public demo uses `ENVIRONMENT=demo`, synthetic scenarios, mock providers, and SQLite on a persistent disk.
+**Current runtime note:** The default environment uses simulated providers. The Decider and Bedrock boxes below describe optional integration points; `configured_unverified` is not evidence of a live connection. Hosted public demo uses `ENVIRONMENT=demo`, synthetic scenarios, and mock providers. Render demo mode defaults to SQLite under `/tmp` when no `DATABASE_PATH` is set; that data is ephemeral. Persistence requires an explicitly configured, verified writable disk mount.
 
 ---
 
