@@ -19,9 +19,6 @@ ENV PYTHONUNBUFFERED=1 \
 # Install backend dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# The API uses only strands-decider's pure-Python HTTP schema. Skip the package's
-# optional local-model dependencies (PyTorch/Transformers/CUDA stack) in this image.
-RUN pip install --no-cache-dir --no-deps "strands-decider==0.2.0"
 
 # Create non-root user and persistent storage directory
 RUN useradd -m -u 1000 sentinel && \

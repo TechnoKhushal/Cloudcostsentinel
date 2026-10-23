@@ -95,7 +95,6 @@ python -m venv .venv
 
 # Install backend dependencies
 pip install -r requirements.txt
-pip install --no-deps "strands-decider==0.2.0"
 
 # Copy environment template
 cp .env.example .env

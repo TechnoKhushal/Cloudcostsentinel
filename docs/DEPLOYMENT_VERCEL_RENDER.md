@@ -4,7 +4,7 @@ This repository's public demo is synthetic and shared. It uses mock Decider and 
 
 ## Confirmed connectivity findings (2026-10-24)
 
-- A live `GET /api/health` returned HTTP 200, but reported `environment=development`, `auth.enabled=false`, and `mode=development_bypass`. A live `GET /api/health/ready` returned the same health-shaped payload. That does not match this repository's current readiness handler, which returns a separate `status=ready|not_ready` response after checking SQLite. The hosted backend therefore appears to be serving an older build or configuration; redeploy the current `main` commit and check its startup logs.
+- A live `GET /api/health` returned HTTP 200, but reported `environment=development`, `auth.enabled=false`, and `mode=development_bypass`. A live `GET /api/health/ready` returned the same health-shaped payload. That does not match this repository's readiness handler, which returns a separate `status=ready|not_ready` response after checking SQLite. The hosted backend therefore appeared to be serving an older build or configuration. The latest Render import log also reported `ModuleNotFoundError: No module named 'strands_decider'`; this repair removes that API startup dependency. Render's configured branch, commit, root directory, and build command cannot be verified without dashboard access.
 - An `OPTIONS /api/demo/scenarios` request with the deployed Vercel origin returned HTTP 400 and `Disallowed CORS origin`. This confirms the backend's effective CORS allowlist does not include that origin.
 - In a browser without a Vercel session, the supplied Vercel URL redirected to Vercel login. The application UI and its Network/Console failures could not be inspected without access to the deployment.
 - Later direct probes intermittently failed DNS resolution. Check results again after deployment; the intermittent failures do not establish that either service is down.
@@ -25,7 +25,7 @@ If the app is intended to be public, review Vercel Deployment Protection for the
 
 ## Render backend settings for the simulated demo
 
-Deploy the current repository revision as the backend web service. For a Docker deployment, use the repository Dockerfile. For a native Python service, use Python 3.11 (the repository `.python-version` pins Render to the same runtime as CI and Docker). Set the build command to `pip install -r requirements.txt && pip install --no-deps "strands-decider==0.2.0"`; the second command installs the API schema without the optional local model runtime. Use this start command:
+Use repository root directory and branch `codex/repair-vercel-render-connectivity` until the repair is merged. There is no checked-in `render.yaml`, so verify these settings in the Render dashboard. For a Docker deployment, use the repository Dockerfile. For a native Python service, use Python 3.11 (the repository `.python-version` pins Render to the same runtime as CI and Docker), set the build command to `pip install -r requirements.txt`, and use this start command:
 
 ```text
 uvicorn backend.main:app --host 0.0.0.0 --port $PORT

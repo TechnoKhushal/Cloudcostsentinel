@@ -4,13 +4,7 @@ This mode is an opt-in, shared demonstration using synthetic scenarios, simulate
 
 ## Render backend
 
-Use the repository root and the Dockerfile. The checked-in `.python-version` pins the native Render runtime to Python 3.11, matching CI and Docker. For a native Python service, set the build command to:
-
-```sh
-pip install -r requirements.txt && pip install --no-deps "strands-decider==0.2.0"
-```
-
-The second install provides the API wire schema without the optional local model runtime and its heavyweight dependencies. To run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
+Use the repository root (not `backend/`) and branch `codex/repair-vercel-render-connectivity` until its changes are merged. The repository does not contain a `render.yaml`; confirm the Render service dashboard points to that branch and root directory because dashboard settings are not available from this workspace. Use the repository Dockerfile, or configure the native Python service with Python 3.11 (the checked-in `.python-version` matches CI and Docker) and build command `pip install -r requirements.txt`. The API does not import or require the standalone model-serving package; to run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
 
 ```sh
 uvicorn backend.main:app --host 0.0.0.0 --port "$PORT"
@@ -46,6 +40,13 @@ curl -i https://cloudcostsentinel.onrender.com/api/health/live
 curl -i https://cloudcostsentinel.onrender.com/api/health/ready
 curl -i https://cloudcostsentinel.onrender.com/api/health
 curl -i https://cloudcostsentinel.onrender.com/api/demo/scenarios
+```
+
+For automated checks, run:
+
+```sh
+python scripts/smoke_test_deployment.py https://cloudcostsentinel.onrender.com \
+  --frontend-origin https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
 
 The live probe should return 200. In `ENVIRONMENT=demo`, readiness should return 200 with database `connected` and providers `simulated`. Confirm browser analysis responses label the anomaly, Decider provider, and report as simulated. Restart/redeploy and confirm the persistent disk retains approvals. A public demo shares approval state between visitors and is not an authenticated tenant environment.

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 import pytest
@@ -217,6 +219,46 @@ async def test_api_health_endpoint():
         assert "state" in data["providers"]["decider"]
         assert "bedrock" in data["providers"]
         assert "auth" in data
+
+
+def test_demo_app_imports_when_strands_decider_package_is_absent():
+    """Render's mock/demo runtime must not need the separate model-serving package."""
+    script = r'''
+import importlib.abc
+import sys
+
+class BlockStrandsDecider(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "strands_decider" or fullname.startswith("strands_decider."):
+            raise ModuleNotFoundError("simulated missing optional strands-decider package")
+        return None
+
+sys.meta_path.insert(0, BlockStrandsDecider())
+from backend.config import Settings
+Settings(
+    ENVIRONMENT="demo", AUTH_ENABLED=False,
+    CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
+    DECIDER_PROVIDER="mock", BEDROCK_PROVIDER="mock",
+    AWS_COST_EXPLORER_ENABLED=False, NOTIFICATION_PROVIDER="disabled",
+).validate_startup()
+Settings(
+    ENVIRONMENT="development", DECIDER_PROVIDER="http", PORT=8000,
+    STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
+).validate_startup()
+from backend.services.decider_client import DeciderClient
+assert DeciderClient(provider="http").build_question()["type"] == "choice"
+import backend.main
+print("import-ok")
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=os.path.dirname(os.path.dirname(__file__)),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "import-ok" in result.stdout
 
 
 @pytest.mark.asyncio
@@ -733,7 +775,45 @@ async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
     assert allowed.status_code == 200
     assert allowed.headers.get("access-control-allow-origin") == configured_origin
     assert allowed.headers.get("access-control-allow-credentials") == "true"
+    assert "POST" in allowed.headers.get("access-control-allow-methods", "")
+    assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
     assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_deployed_vercel_origin():
+    origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
+    prior_origins = list(settings.CORS_ORIGINS)
+    settings.CORS_ORIGINS[:] = list(dict.fromkeys([*prior_origins, origin]))
+    app.middleware_stack = None
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            allowed = await ac.options(
+                "/api/demo/scenarios",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            rejected = await ac.options(
+                "/api/demo/scenarios",
+                headers={
+                    "Origin": "https://unapproved.example",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+        assert allowed.status_code == 200
+        assert allowed.headers.get("access-control-allow-origin") == origin
+        assert "GET" in allowed.headers.get("access-control-allow-methods", "")
+        assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
+        assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
+        assert "access-control-allow-origin" not in rejected.headers
+    finally:
+        settings.CORS_ORIGINS[:] = prior_origins
+        app.middleware_stack = None
 
 
 @pytest.mark.asyncio

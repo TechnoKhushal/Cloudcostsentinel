@@ -12,15 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from strands_decider.schema import (
-    ChoiceAnswer,
-    ChoiceQuestion,
-    SystemOneRequest,
-    SystemOneResponse,
-    Usage,
-    derive_confidence,
-)
-
 from .auth import AuthenticatedPrincipal, require_reviewer, require_viewer
 from .config import settings
 from .database.db import ApprovalConflictError, DatabaseRepository
@@ -30,6 +21,7 @@ from .models.decision import DeciderResponseTrace
 from .models.report import BedrockReport
 from .services.aws_cost_explorer import AWSCostExplorerService
 from .services.cost_analyzer import CostScenarioRegistry
+from .services.confidence import normalized_confidence
 from .services.decider_client import DeciderClient
 from .services.strands_agent import StrandsBedrockNarrator
 
@@ -403,9 +395,9 @@ async def record_approval_decision(
 if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
     @app.post("/v1/systemone", tags=["Strands Decider System One Spec"])
     async def strands_decider_systemone_endpoint(
-        req: SystemOneRequest,
+        req: Dict[str, Any],
         response: Response,
-    ) -> SystemOneResponse:
+    ) -> Dict[str, Any]:
         """Reference server implementing the official Strands Decider wire protocol.
 
         Provides a test-fixture for protocol validation and local tests.
@@ -413,11 +405,16 @@ if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
         Only active when ENABLE_TEST_FIXTURE_ENDPOINT=true (never in production).
         """
         response.headers["X-Sentinel-Test-Fixture"] = "true"
+        questions = req.get("questions")
+        if not isinstance(questions, dict) or not isinstance(req.get("state"), str):
+            raise HTTPException(status_code=422, detail="Request must include string state and questions object.")
         answers: Dict[str, Any] = {}
-        for q_name, question in req.questions.items():
-            if isinstance(question, ChoiceQuestion):
-                opts = list(question.criteria.keys())
-                state_text = str(req.state).lower()
+        for q_name, question in questions.items():
+            if isinstance(question, dict) and question.get("type") == "choice" and isinstance(question.get("criteria"), dict):
+                opts = list(question["criteria"].keys())
+                if not opts:
+                    raise HTTPException(status_code=422, detail="Choice question criteria must not be empty.")
+                state_text = str(req["state"]).lower()
                 if "critical" in state_text or "spike" in state_text or "unknown" in state_text or "+3" in state_text:
                     choice = "request_approval" if "request_approval" in opts else opts[0]
                     probs = {opt: (0.85 if opt == choice else (0.15 / max(1, len(opts) - 1))) for opt in opts}
@@ -428,23 +425,24 @@ if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
                     choice = "monitor" if "monitor" in opts else opts[0]
                     probs = {opt: (0.88 if opt == choice else (0.12 / max(1, len(opts) - 1))) for opt in opts}
 
-                conf = derive_confidence(list(probs.values()))
-                answers[q_name] = ChoiceAnswer(
-                    choice=choice,
-                    probabilities=probs,
-                    confidence=conf,
-                )
+                conf = normalized_confidence(probs.values())
+                answers[q_name] = {
+                    "type": "choice",
+                    "choice": choice,
+                    "probabilities": probs,
+                    "confidence": conf,
+                }
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Question type '{question.type}' not supported in this endpoint.",
+                    detail=f"Question type '{question.get('type') if isinstance(question, dict) else 'unknown'}' not supported in this endpoint.",
                 )
 
-        return SystemOneResponse(
-            model="StrandsAgents/strands-decider-2B-hobson-v19",
-            answers=answers,
-            usage=Usage(input_tokens=180, output_tokens=0),
-        )
+        return {
+            "model": str(req.get("model", "StrandsAgents/strands-decider-2B-hobson-v19")),
+            "answers": answers,
+            "usage": {"input_tokens": 180, "output_tokens": 0},
+        }
 else:
     # Register a stub that returns 404 so tests targeting the disabled endpoint get a clear error.
     @app.post("/v1/systemone", include_in_schema=False)
