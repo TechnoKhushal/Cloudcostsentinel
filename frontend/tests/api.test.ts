@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { ApiError, apiUrl, fetchApprovals, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision } from "./api.ts";
+import { ApiError, apiUrl, fetchApprovals, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });

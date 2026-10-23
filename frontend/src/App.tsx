@@ -117,8 +117,11 @@ export const App = () => {
   useEffect(() => {
     const controller = new AbortController();
     resourceRequest.current = controller;
-    void refreshResources(controller.signal, true);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => { void refreshResources(controller.signal, true); }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [refreshResources]);
 
   const handleRefresh = () => {
