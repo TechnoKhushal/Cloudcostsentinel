@@ -1,5 +1,15 @@
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, BedrockReport, HealthInfo, Scenario } from "./types";
 
+export class ApiError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 // VITE_API_BASE_URL is the backend origin only, with no /api suffix.
 export const getApiBase = (): string => {
   const envUrl = import.meta.env.VITE_API_BASE_URL;
@@ -25,6 +35,19 @@ function apiUrl(path: string): string {
   return `${getApiBase()}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function formatValidationDetail(detail: unknown): string | undefined {
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return undefined;
+  const issues = detail.flatMap((issue: unknown) => {
+    if (!issue || typeof issue !== "object") return [];
+    const item = issue as { loc?: unknown[]; msg?: unknown };
+    if (typeof item.msg !== "string") return [];
+    const location = Array.isArray(item.loc) ? item.loc.map(String).join(".") : "request";
+    return [`${location}: ${item.msg}`];
+  });
+  return issues.length ? `Validation failed: ${issues.join("; ")}` : undefined;
+}
+
 async function requestJson<T>(path: string, init: RequestInit = {}, operation = "API request"): Promise<T> {
   const url = apiUrl(path);
   const timeout = AbortSignal.timeout(20_000);
@@ -36,9 +59,9 @@ async function requestJson<T>(path: string, init: RequestInit = {}, operation = 
   } catch (error) {
     if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error("Backend request timed out. The service may be starting; retry in a few seconds.");
+      throw new ApiError("Backend request timed out. The service may be starting; retry in a few seconds.");
     }
-    throw new Error("Cannot reach the backend. Check network access, the backend CORS origin allowlist, and VITE_API_BASE_URL; retry if the service is waking.");
+    throw new ApiError("Cannot reach the backend. Check network access, the backend CORS origin allowlist, and VITE_API_BASE_URL; retry if the service is waking.");
   }
 
   const body = await response.text();
@@ -49,19 +72,22 @@ async function requestJson<T>(path: string, init: RequestInit = {}, operation = 
     payload = undefined;
   }
   if (!response.ok) {
-    const detail = payload && typeof payload === "object" && "detail" in payload
-      ? String((payload as { detail: unknown }).detail)
+    const rawDetail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail: unknown }).detail
       : undefined;
+    const detail = response.status === 422 ? formatValidationDetail(rawDetail) : typeof rawDetail === "string" ? rawDetail : undefined;
     const statusMessage = response.status === 401 ? "Authentication required. Sign in with the configured identity provider."
-      : response.status === 403 ? "This account is not allowed to perform this action."
-      : response.status === 404 ? "The backend route was not found. Check VITE_API_BASE_URL and API version."
+      : response.status === 403 ? "This account is not allowed to perform this action. Check its permissions or role."
+      : response.status === 404 ? `Backend endpoint ${path} was not found. Check VITE_API_BASE_URL and the API version.`
+      : response.status === 422 ? undefined
       : response.status >= 500 ? "The backend failed while handling this request. Retry or contact the service operator."
       : undefined;
-    throw new Error(detail || statusMessage || (body && !payload
+    const message = statusMessage || detail || (body && !payload
       ? `${operation} returned an unexpected non-JSON response (${response.status}). Check the backend URL.`
-      : `${operation} failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`));
+      : `${operation} failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`);
+    throw new ApiError(message, response.status);
   }
-  if (!payload) throw new Error(`${operation} returned an empty or invalid JSON response.`);
+  if (!payload) throw new ApiError(`${operation} returned an empty or invalid JSON response.`, response.status);
   return payload as T;
 }
 
