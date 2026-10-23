@@ -14,7 +14,7 @@ export const BedrockReportPanel: React.FC<BedrockReportPanelProps> = ({ report }
       <div className="panel-header">
         <div className="panel-title">
           <Sparkles size={18} color="#a855f7" />
-          <span>Amazon Bedrock — Grounded Cost Investigation</span>
+          <span>{report.is_simulated ? "Simulated Cost Investigation" : "Amazon Bedrock — Grounded Cost Investigation"}</span>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem" }}>
           <span className="status-pill pill-purple">

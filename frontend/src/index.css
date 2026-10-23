@@ -87,6 +87,24 @@ body {
   align-items: center;
 }
 
+.public-demo-notice {
+  margin: -0.5rem 0 1rem;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fcd34d;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.data-source-label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin: -0.65rem 0 1rem;
+  text-transform: capitalize;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

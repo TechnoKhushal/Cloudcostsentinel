@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import List, Optional
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -94,11 +95,6 @@ class Settings(BaseModel):
     DATABASE_PATH: str = Field(default_factory=lambda: os.getenv("DATABASE_PATH", "backend/data/sentinel.db"))
     DATABASE_URL: Optional[str] = Field(default_factory=lambda: os.getenv("DATABASE_URL"))
 
-    # Production safeguards
-    ALLOW_MOCK_IN_PRODUCTION: bool = Field(
-        default_factory=lambda: os.getenv("ALLOW_MOCK_IN_PRODUCTION", "false").lower() in ("true", "1", "yes")
-    )
-
     # Test fixture endpoint — disabled by default; never enable in production
     ENABLE_TEST_FIXTURE_ENDPOINT: bool = Field(
         default_factory=lambda: os.getenv("ENABLE_TEST_FIXTURE_ENDPOINT", "false").lower() in ("true", "1", "yes")
@@ -106,6 +102,12 @@ class Settings(BaseModel):
 
     def validate_startup(self) -> None:
         """Validate startup configuration to prevent unsafe states."""
+        if self.ENVIRONMENT not in {"development", "demo", "production"}:
+            raise ValueError("ENVIRONMENT must be development, demo, or production.")
+        if self.ENVIRONMENT == "development" and os.getenv("RENDER"):
+            raise ValueError("Render deployment must explicitly select ENVIRONMENT=demo or ENVIRONMENT=production.")
+        if os.getenv("RENDER") and self.HOST != "0.0.0.0":
+            raise ValueError("Render deployment requires HOST=0.0.0.0.")
         if not (0.0 < self.DECIDER_MIN_CONFIDENCE <= 1.0):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
 
@@ -118,12 +120,21 @@ class Settings(BaseModel):
         if self.BEDROCK_PROVIDER not in allowed_bedrock:
             raise ValueError(f"Invalid BEDROCK_PROVIDER '{self.BEDROCK_PROVIDER}'. Allowed: {allowed_bedrock}")
 
-        if self.ENVIRONMENT == "production":
-            if "*" in self.CORS_ORIGINS:
-                raise ValueError("Wildcard '*' in CORS_ORIGINS is prohibited in production.")
+        if self.DATABASE_URL:
+            raise ValueError(
+                "DATABASE_URL is not supported by the current SQLite repository. "
+                "Remove it or implement PostgreSQL support before configuring it."
+            )
 
-            # Production requires AUTH_ENABLED=True — the ALLOW_UNAUTHENTICATED_IN_PRODUCTION
-            # escape hatch has been removed. There is no override for production auth bypass.
+        if self.ENVIRONMENT == "production":
+            if self.ENABLE_TEST_FIXTURE_ENDPOINT:
+                raise ValueError(
+                    "Production startup refused: ENABLE_TEST_FIXTURE_ENDPOINT must be false in production. "
+                    "The /v1/systemone test fixture must never be active in production."
+                )
+            self._validate_public_origins()
+
+            # Production requires validated OIDC authentication. There is no bypass.
             if not self.AUTH_ENABLED:
                 raise ValueError(
                     "Production startup refused: AUTH_ENABLED must be True in production. "
@@ -143,17 +154,47 @@ class Settings(BaseModel):
                     raise ValueError(
                         f"AUTH_ENABLED=true requires these environment variables to be set: {missing}"
                     )
+                issuer = urlsplit(self.AUTH_ISSUER or "")
+                jwks = urlsplit(self.AUTH_JWKS_URL or "")
+                if issuer.scheme != "https" or not issuer.netloc or jwks.scheme != "https" or not jwks.netloc:
+                    raise ValueError("Production OIDC issuer and JWKS URL must be valid HTTPS URLs.")
 
-            if (self.DECIDER_PROVIDER == "mock" or self.BEDROCK_PROVIDER == "mock") and not self.ALLOW_MOCK_IN_PRODUCTION:
-                raise ValueError("Production startup refused: mock providers cannot be used in production without ALLOW_MOCK_IN_PRODUCTION=true.")
-
-            if self.ENABLE_TEST_FIXTURE_ENDPOINT:
+            if self.DECIDER_PROVIDER == "mock" or self.BEDROCK_PROVIDER == "mock":
                 raise ValueError(
-                    "Production startup refused: ENABLE_TEST_FIXTURE_ENDPOINT must be false in production. "
-                    "The /v1/systemone test fixture must never be active in production."
+                    "Production startup refused: mock providers are prohibited; use ENVIRONMENT=demo for simulated providers."
                 )
 
+            if self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH):
+                raise ValueError(
+                    "Production startup requires DATABASE_PATH to be an explicit absolute path on a persistent disk."
+                )
+
+        if self.ENVIRONMENT == "demo":
+            self._validate_public_origins()
+            if self.AUTH_ENABLED:
+                raise ValueError("ENVIRONMENT=demo is unauthenticated by design; set AUTH_ENABLED=false.")
+            if self.DECIDER_PROVIDER != "mock" or self.BEDROCK_PROVIDER != "mock":
+                raise ValueError("ENVIRONMENT=demo requires DECIDER_PROVIDER=mock and BEDROCK_PROVIDER=mock.")
+            if self.AWS_COST_EXPLORER_ENABLED:
+                raise ValueError("ENVIRONMENT=demo prohibits live AWS Cost Explorer access.")
+            if self.NOTIFICATION_PROVIDER not in {"disabled", "mock"}:
+                raise ValueError("ENVIRONMENT=demo allows only disabled or simulated notifications.")
+            if self.ENABLE_TEST_FIXTURE_ENDPOINT:
+                raise ValueError("ENVIRONMENT=demo must not enable the Decider test-fixture endpoint.")
+            if os.getenv("RENDER") and (
+                self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH)
+            ):
+                raise ValueError("Render demo requires DATABASE_PATH on an explicitly mounted persistent disk.")
+
         if self.DECIDER_PROVIDER == "http":
+            decider_url = urlsplit(self.STRANDS_DECIDER_URL)
+            if (
+                decider_url.scheme not in {"http", "https"}
+                or not decider_url.netloc
+                or decider_url.username
+                or decider_url.password
+            ):
+                raise ValueError("STRANDS_DECIDER_URL must be a valid HTTP(S) URL without embedded credentials.")
             # Guard against pointing live HTTP decider to application's own port
             app_port_str = f":{self.PORT}"
             if "127.0.0.1" in self.STRANDS_DECIDER_URL and app_port_str in self.STRANDS_DECIDER_URL:
@@ -161,6 +202,29 @@ class Settings(BaseModel):
                     f"STRANDS_DECIDER_URL ({self.STRANDS_DECIDER_URL}) points to the application's own HTTP port {self.PORT}. "
                     "In live HTTP mode, you must connect to an external strands-decider serve process (e.g. port 8080)."
                 )
+
+    def _validate_public_origins(self) -> None:
+        if not self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS must contain the exact HTTPS frontend origin(s).")
+        for origin in self.CORS_ORIGINS:
+            parsed = urlsplit(origin)
+            if origin == "*":
+                raise ValueError("Wildcard '*' in public CORS_ORIGINS is prohibited.")
+            is_local_demo_origin = (
+                self.ENVIRONMENT == "demo"
+                and parsed.scheme == "http"
+                and parsed.hostname in {"localhost", "127.0.0.1"}
+            )
+            if (
+                (parsed.scheme != "https" and not is_local_demo_origin)
+                or not parsed.netloc
+                or parsed.path not in ("", "/")
+                or parsed.query
+                or parsed.fragment
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError("Public CORS_ORIGINS must contain exact HTTPS origins without paths or credentials.")
 
 
 settings = Settings()

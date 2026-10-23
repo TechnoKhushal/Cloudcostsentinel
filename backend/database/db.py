@@ -93,6 +93,15 @@ class DatabaseRepository:
             if "is_simulated" not in columns:
                 conn.execute("ALTER TABLE approvals ADD COLUMN is_simulated INTEGER DEFAULT 1")
 
+    def check_ready(self) -> bool:
+        """Return whether the configured local repository accepts a lightweight query."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("SELECT 1").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
+
     def save_anomaly(self, anomaly: CostAnomaly) -> None:
         with self._get_connection() as conn:
             conn.execute(

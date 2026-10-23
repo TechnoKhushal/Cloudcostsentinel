@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -399,6 +401,41 @@ def test_database_is_simulated_preservation(tmp_path):
     assert updated.is_simulated is False
 
 
+def test_concurrent_approval_transition_has_exactly_one_winner(tmp_path):
+    repo = DatabaseRepository(str(tmp_path / "approval-race.db"))
+    approval = ApprovalItem(
+        id="appr-race-001",
+        decision_id="dec-race-001",
+        anomaly_id="anom-race-001",
+        service="Amazon EC2",
+        environment="demo",
+        suggested_action="Review capacity",
+        estimated_monthly_savings=100.0,
+        status="pending",
+        created_at="2026-10-23T00:00:00Z",
+    )
+    repo.save_approval(approval)
+    start = Barrier(2)
+
+    def transition(reviewer: str) -> str:
+        start.wait()
+        try:
+            result = repo.update_approval_status("appr-race-001", "approved", reviewer, "race test")
+            return "success" if result else "missing"
+        except ApprovalConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(transition, ["reviewer-a", "reviewer-b"]))
+    assert outcomes.count("success") == 1
+    assert outcomes.count("conflict") == 1
+    final = repo.get_approvals()[0]
+    assert final.status == "approved"
+    assert final.reviewed_by in {"reviewer-a", "reviewer-b"}
+    assert final.notes == "race test"
+    assert final.reviewed_at is not None
+
+
 def test_startup_validation_rules():
     # Confidence threshold out of bounds
     with pytest.raises(ValueError, match="DECIDER_MIN_CONFIDENCE"):
@@ -425,6 +462,51 @@ def test_startup_validation_rules():
             BEDROCK_PROVIDER="bedrock",
         ).validate_startup()
 
+
+def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
+    safe_demo = Settings(
+        ENVIRONMENT="demo",
+        AUTH_ENABLED=False,
+        CORS_ORIGINS=["https://sentinel.example"],
+        DECIDER_PROVIDER="mock",
+        BEDROCK_PROVIDER="mock",
+        AWS_COST_EXPLORER_ENABLED=False,
+        NOTIFICATION_PROVIDER="disabled",
+    )
+    safe_demo.validate_startup()
+
+    with pytest.raises(ValueError, match="AWS Cost Explorer"):
+        Settings(
+            ENVIRONMENT="demo",
+            AUTH_ENABLED=False,
+            CORS_ORIGINS=["https://sentinel.example"],
+            AWS_COST_EXPLORER_ENABLED=True,
+        ).validate_startup()
+
+    with pytest.raises(ValueError, match="Wildcard"):
+        Settings(
+            ENVIRONMENT="demo",
+            AUTH_ENABLED=False,
+            CORS_ORIGINS=["*"],
+        ).validate_startup()
+
+
+def test_production_rejects_sqlite_database_url():
+    with pytest.raises(ValueError, match="DATABASE_URL is not supported"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.example"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://issuer.example/jwks.json",
+            AUTH_ISSUER="https://issuer.example",
+            AUTH_AUDIENCE="sentinel-api",
+            DECIDER_PROVIDER="http",
+            BEDROCK_PROVIDER="bedrock",
+            DATABASE_URL="postgresql://user:pass@db.example/sentinel",
+        ).validate_startup()
+
+
+def test_production_auth_fixture_and_decider_startup_validation():
     # Production refuses AUTH_ENABLED=False (escape hatch removed)
     with pytest.raises(ValueError, match="AUTH_ENABLED must be True"):
         Settings(
@@ -444,7 +526,6 @@ def test_startup_validation_rules():
             AUTH_AUDIENCE=None,
             DECIDER_PROVIDER="mock",
             BEDROCK_PROVIDER="mock",
-            ALLOW_MOCK_IN_PRODUCTION=True,
         ).validate_startup()
 
     # Production refuses ENABLE_TEST_FIXTURE_ENDPOINT=true
@@ -458,7 +539,6 @@ def test_startup_validation_rules():
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="mock",
             BEDROCK_PROVIDER="mock",
-            ALLOW_MOCK_IN_PRODUCTION=True,
             ENABLE_TEST_FIXTURE_ENDPOINT=True,
         ).validate_startup()
 
@@ -538,7 +618,6 @@ def test_auth_requires_oidc_when_enabled():
             AUTH_AUDIENCE=None,
             DECIDER_PROVIDER="mock",
             BEDROCK_PROVIDER="mock",
-            ALLOW_MOCK_IN_PRODUCTION=True,
         ).validate_startup()
 
 
@@ -560,7 +639,6 @@ def test_fixture_endpoint_rejected_in_production():
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="mock",
             BEDROCK_PROVIDER="mock",
-            ALLOW_MOCK_IN_PRODUCTION=True,
             ENABLE_TEST_FIXTURE_ENDPOINT=True,
         ).validate_startup()
 
@@ -593,6 +671,94 @@ async def test_auth_enabled_rejects_malformed_token():
                 headers={"Authorization": "Bearer not.a.real.jwt"},
             )
             assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
+    transport = ASGITransport(app=app)
+    configured_origin = settings.CORS_ORIGINS[0]
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        allowed = await ac.options(
+            "/api/analyze",
+            headers={
+                "Origin": configured_origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        rejected = await ac.options(
+            "/api/analyze",
+            headers={
+                "Origin": "https://unlisted.invalid",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+    assert allowed.status_code == 200
+    assert allowed.headers.get("access-control-allow-origin") == configured_origin
+    assert allowed.headers.get("access-control-allow-credentials") == "true"
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.asyncio
+async def test_demo_analysis_rejects_live_or_custom_cost_inputs():
+    import unittest.mock
+
+    with unittest.mock.patch.object(settings, "ENVIRONMENT", "demo"), unittest.mock.patch.object(settings, "AUTH_ENABLED", False):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            live = await ac.post("/api/analyze", json={"use_aws_cost_explorer": True})
+            custom = await ac.post(
+                "/api/analyze",
+                json={"custom_anomaly": CostScenarioRegistry.generate_scenario_anomaly("compute_spike").model_dump(mode="json")},
+            )
+    assert live.status_code == 403
+    assert custom.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_readiness_reflects_database_and_demo_provider_state():
+    import unittest.mock
+
+    with unittest.mock.patch.object(settings, "ENVIRONMENT", "demo"), \
+         unittest.mock.patch.object(settings, "DECIDER_PROVIDER", "mock"), \
+         unittest.mock.patch.object(settings, "BEDROCK_PROVIDER", "mock"), \
+         unittest.mock.patch.object(db, "check_ready", return_value=True):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            ready = await ac.get("/api/health/ready")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["checks"]["decider"] == "simulated"
+
+    with unittest.mock.patch.object(db, "check_ready", return_value=False):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            not_ready = await ac.get("/api/health/ready")
+    assert not_ready.status_code == 503
+    assert not_ready.json()["status"] == "not_ready"
+
+
+@pytest.mark.asyncio
+async def test_partial_cost_explorer_warning_is_returned_with_analysis():
+    import unittest.mock
+
+    anomaly = CostScenarioRegistry.generate_scenario_anomaly("compute_spike")
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", False), \
+         unittest.mock.patch.object(settings, "ENVIRONMENT", "development"), \
+         unittest.mock.patch.object(cost_explorer, "fetch_recent_costs", return_value=(anomaly, "PARTIAL_DATA: page limit reached")), \
+         unittest.mock.patch.object(db, "save_anomaly"), \
+         unittest.mock.patch.object(db, "save_decision_trace"), \
+         unittest.mock.patch.object(db, "save_approval"), \
+         unittest.mock.patch.object(db, "save_report"):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/api/analyze", json={"use_aws_cost_explorer": True})
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["cost_data_source"] == "aws_cost_explorer"
+    assert result["partial_data"] is True
+    assert result["anomaly"]["metrics"]["uncertainty_flag"] is True
+    assert result["data_warnings"] == ["PARTIAL_DATA: page limit reached"]
 
 
 @pytest.mark.asyncio

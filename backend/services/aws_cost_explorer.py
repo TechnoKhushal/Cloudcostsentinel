@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
+from botocore.config import Config
 
 from ..config import settings
 from ..models.cost import CostAnomaly, CostDataPoint, SpendMetrics
@@ -42,52 +43,12 @@ class AWSCostExplorerService:
                 "message": "AWS Cost Explorer is disabled by default. Set AWS_COST_EXPLORER_ENABLED=true to enable.",
                 "region": self.region_name,
             }
-
-        try:
-            session = boto3.Session(region_name=self.region_name)
-            credentials = session.get_credentials()
-            if not credentials:
-                return {
-                    "enabled": True,
-                    "status": "missing_credentials",
-                    "message": "AWS credentials not detected in standard credential chain (~/.aws/credentials or environment).",
-                    "region": self.region_name,
-                }
-
-            # Non-mutative STS caller identity check
-            sts = session.client("sts")
-            identity = sts.get_caller_identity()
-            account_masked = f"***{identity.get('Account', '')[-4:]}"
-
-            return {
-                "enabled": True,
-                "status": "configured_credentials_present",
-                "message": f"AWS credentials found for account {account_masked} in {self.region_name}. Read permission verified upon query.",
-                "account_masked": account_masked,
-                "region": self.region_name,
-            }
-        except (NoCredentialsError, PartialCredentialsError):
-            return {
-                "enabled": True,
-                "status": "missing_credentials",
-                "message": "AWS credentials missing or incomplete.",
-                "region": self.region_name,
-            }
-        except ClientError as ce:
-            code = ce.response.get("Error", {}).get("Code", "ClientError")
-            return {
-                "enabled": True,
-                "status": f"permission_denied_{code}",
-                "message": f"AWS credential check error ({code}): verify sts:GetCallerIdentity permission.",
-                "region": self.region_name,
-            }
-        except Exception as exc:
-            return {
-                "enabled": True,
-                "status": "connection_error",
-                "message": f"Unable to connect to AWS: {str(exc)}",
-                "region": self.region_name,
-            }
+        return {
+            "enabled": True,
+            "status": "configured_unverified",
+            "message": "Cost Explorer credentials and read permissions are verified only by an actual cost query.",
+            "region": self.region_name,
+        }
 
     def fetch_recent_costs(
         self, days: int = 14, monthly_budget: float = 10000.0
@@ -97,7 +58,11 @@ class AWSCostExplorerService:
             return None, "AWS Cost Explorer is disabled in configuration."
 
         try:
-            client = boto3.client("ce", region_name=self.region_name)
+            client = boto3.client(
+                "ce",
+                region_name=self.region_name,
+                config=Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"}),
+            )
             now_utc = datetime.now(timezone.utc)
             # TimePeriod.End is exclusive in Cost Explorer API.
             # Daily billing metrics typically lag by 24-48 hours.

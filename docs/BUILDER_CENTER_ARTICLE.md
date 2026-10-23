@@ -3,9 +3,11 @@
 **Tags:** `#strands-decider-2b` `#policy`
 *Draft article for AWS Builder Center / Strands Developer Community (Unpublished)*
 
+> **Implementation status:** This repository defaults to simulated decision and narrative providers. This draft describes the intended integration architecture; genuine Decider and Bedrock connectivity has not been verified for the current release. Do not publish claims of live inference without fresh evidence.
+
 ---
 
-## The Autonomous Cloud Dilemma
+## The Cloud Cost Decision Support Dilemma
 
 Every cloud engineer knows the feeling of opening the AWS Billing console at the end of the month only to discover an unpredicted spend spike. Perhaps a test Kubernetes worker pool forgot its autoscaling down-threshold, an EMR batch process fell back from Spot to on-demand instances, or an unindexed database query caused provisioned IOPS to surge.
 
@@ -13,15 +15,13 @@ Engineering teams usually attempt to solve this in one of two ways:
 1. **Static threshold alerts:** Alerts trigger constantly when spending crosses a flat line, creating notification fatigue. Eventually, engineers route them to a muted Slack channel.
 2. **Generative LLM agents:** Builders hook a chatbot up to AWS Cost Explorer. However, general-purpose LLMs are non-deterministic token decoders. Asking a generative model "Should we terminate this cluster?" introduces hallucination risk, high latency, and unpredictable JSON parsing errors.
 
-We built **CloudCost Sentinel** to solve this using an architectural split:
-- **Strands Decider 2B** acts as the deterministic **System 1 Decision Engine**, evaluating multi-dimensional telemetry in milliseconds to choose between three typed policies: `monitor`, `notify_owner`, or `request_approval`.
-- **Amazon Bedrock (Claude 3.7 Sonnet via Strands Agents SDK)** acts as the **System 2 Generative Investigator**, compiling grounded investigation reports, timelines, and remediation steps strictly from observed metrics.
+The intended **CloudCost Sentinel** architecture separates policy selection from report generation. In the current default configuration, a local simulated adapter supplies each output; the HTTP Decider and Amazon Bedrock connectors are optional and not live-verified.
 
 ---
 
-## The Signature Decision: Decider 2B on the Main Path
+## The Signature Decision: A Typed Policy Boundary
 
-Rather than treating Strands Decider 2B as a decorative tool, it sits squarely on the real execution path. The application's downstream behavior changes completely based on what Decider selects.
+When `DECIDER_PROVIDER=http` is deliberately configured, the optional Decider integration sits on the decision path. With the default mock setting, the same interface uses the simulated policy evaluator and makes no Strands model call.
 
 ### The Signature Question
 
@@ -50,9 +50,9 @@ question = ChoiceQuestion(
 
 ---
 
-## Where Amazon Bedrock Fits
+## Optional Amazon Bedrock Integration
 
-Once Decider selects the operational response, Amazon Bedrock performs the generative heavy lifting:
+When `BEDROCK_PROVIDER=bedrock` is configured and access is verified, Bedrock can generate the investigation report. The default `mock` setting uses a local template:
 - It explains *why* the metrics changed, citing exact dollar deltas and persistence days.
 - It provides a grounded audit of Decider's choice without altering it.
 - It outlines safe, non-destructive investigation steps (e.g. checking CloudWatch CPU utilization or autoscaling cooldowns).
@@ -68,7 +68,7 @@ Crucially, **Bedrock is constrained to observed telemetry facts**—it never inv
 2. **Normalized State:** The engine normalizes the metrics into a compact prompt string including ownership, criticality, and persistence.
 3. **Decider 2B Invocation:** Decider selects `request_approval` with 76% confidence ($P(\text{request\_approval}) = 0.84$).
 4. **Execution Routing:** The system queues an approval review item for the cloud operations team with an estimated monthly savings of $22,875.
-5. **Bedrock Report Generation:** Amazon Bedrock drafts the structured incident report, auditing Decider's decision and providing CloudWatch verification commands.
+5. **Report Generation:** The configured report provider creates a structured incident report; the default provider is explicitly simulated.
 6. **Human Sign-Off:** The engineer reviews the evidence on the dashboard and signs off with a click.
 
 ---

@@ -17,7 +17,7 @@ export const Header: React.FC<HeaderProps> = ({ health, isSimulated }) => {
         <div>
           <div className="brand-title">CloudCost Sentinel</div>
           <div className="brand-subtitle">
-            Autonomous Cloud Spend Decision Agent & FinOps Guardian
+            Cloud Spend Decision Support & FinOps Review
           </div>
         </div>
       </div>
@@ -26,25 +26,29 @@ export const Header: React.FC<HeaderProps> = ({ health, isSimulated }) => {
         {/* Mode pill */}
         <span className={`status-pill ${isSimulated ? "pill-amber" : "pill-emerald"}`}>
           <span className="dot">●</span>
-          {isSimulated ? "SIMULATED / DEMO MODE" : "LIVE AWS ACTIVE"}
+          {isSimulated ? "SIMULATED COST DATA" : "LIVE COST DATA"}
+        </span>
+
+        <span className={`status-pill ${health?.status === "ready" || health?.status === "healthy" || health?.status === "simulated" ? "pill-emerald" : "pill-amber"}`}>
+          Backend: {health?.environment === "demo" ? "SIMULATED DEMO" : health?.status ?? "OFFLINE"}
         </span>
 
         {/* Decider Model Pill */}
         <span className={`status-pill ${health?.providers.decider.provider === "http" ? "pill-cyan" : "pill-amber"}`}>
           <Cpu size={14} />
-          Decider 2B: {health?.providers.decider.provider === "http" ? "Live HTTP" : "Simulated Mock"}
+          Decider: {health?.providers.decider.provider === "mock" ? "Simulated" : health?.providers.decider.state === "connected" ? "Connected" : "Configured, unverified"}
         </span>
 
         {/* Bedrock Model Pill */}
         <span className={`status-pill ${health?.providers.bedrock.provider === "bedrock" ? "pill-purple" : "pill-amber"}`}>
           <Sparkles size={14} />
-          Bedrock: {health?.providers.bedrock.provider === "bedrock" ? "Claude 3.7 Sonnet (Live)" : "Demo Narrator (Simulated)"}
+          Bedrock: {health?.providers.bedrock.provider === "mock" ? "Simulated narrator" : health?.providers.bedrock.state === "connected" ? "Connected" : "Configured, unverified"}
         </span>
 
         {/* AWS Cost Explorer Status */}
         <span className="status-pill">
           <Cloud size={14} />
-          Cost Explorer: {health?.providers.cost_explorer.enabled ? "Enabled" : "Off (Safe)"}
+          Cost Explorer: {health?.providers.cost_explorer.enabled ? "Configured, unverified" : "Off (Safe)"}
         </span>
 
         {/* Safety Lock Pill */}

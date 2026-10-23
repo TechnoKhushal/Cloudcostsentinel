@@ -2,11 +2,13 @@
 
 This runbook provides step-by-step operational procedures for running, monitoring, migrating, and troubleshooting CloudCost Sentinel.
 
+For a hosted public synthetic demo, use [DEMO_DEPLOYMENT.md](DEMO_DEPLOYMENT.md). The browser UI does not yet implement OIDC login; do not treat it as a usable authenticated production dashboard.
+
 ---
 
 ## 1. Quick Start & Execution Modes
 
-### Mode A: Local Offline Demo (Zero AWS Credentials, Instant Setup)
+### Mode A: Local Development Demo (Zero AWS Credentials)
 The default out-of-the-box configuration runs completely locally with calibrated synthetic scenarios and explicit `SIMULATED` badges.
 
 ```bash
@@ -56,7 +58,7 @@ To connect CloudCost Sentinel to the genuine Strands Decider 2B model:
    BEDROCK_PROVIDER=bedrock
    AWS_REGION=us-east-1
    ```
-4. Restart CloudCost Sentinel. Investigations will be drafted by the real Bedrock model.
+4. Restart CloudCost Sentinel. A successful real invocation depends on credentials and model access; this setup is not live-verified here.
 
 ---
 
@@ -68,17 +70,19 @@ CloudCost Sentinel exposes two distinct probes:
 - Returns: `{"status": "ok"}` with HTTP 200.
 - Purpose: Kubernetes liveness / AWS ECS health checks. Performs zero external I/O.
 
-### 2. Readiness Probe: `GET /api/health` or `GET /api/health/ready`
-- Returns comprehensive provider readiness without leaking sensitive keys:
+### 2. Service Summary: `GET /api/health`
+- Reports configured/simulated provider states without asserting external connectivity.
+
+### 3. Readiness Probe: `GET /api/health/ready`
+- Checks the SQLite repository and required provider state. In `ENVIRONMENT=demo`, simulated providers are expected. In production, providers currently remain unverified until bounded live checks are implemented.
   ```json
   {
-    "status": "healthy",
-    "environment": "development",
-    "auth": { "enabled": false, "mode": "development_bypass" },
-    "providers": {
-      "decider": { "provider": "mock", "state": "simulated" },
-      "bedrock": { "provider": "mock", "state": "simulated" },
-      "cost_explorer": { "enabled": false, "status": "disabled_by_configuration" }
+    "status": "ready",
+    "environment": "demo",
+    "checks": {
+      "database": "connected",
+      "decider": "simulated",
+      "bedrock": "simulated"
     }
   }
   ```

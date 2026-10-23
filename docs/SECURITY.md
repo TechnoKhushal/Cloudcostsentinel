@@ -2,7 +2,7 @@
 
 ## 1. Overview & Threat Model
 
-CloudCost Sentinel operates as an autonomous cloud spending decision agent. It analyzes spend anomalies and uses **Strands Decider 2B** to select an operational policy (`monitor`, `notify_owner`, or `request_approval`). Because FinOps agents interact with billing telemetry and human review workflows, strong security boundaries must be maintained.
+CloudCost Sentinel is a cloud cost decision-support application. Its default decision and report providers are simulated. Live integrations require explicit configuration and separate verification.
 
 ### Trust Boundaries
 1. **Frontend to API Gateway / Reverse Proxy**: Web client to FastAPI backend. Protected by OIDC/OAuth2 Bearer tokens in production or local development mode.
@@ -25,7 +25,7 @@ CloudCost Sentinel operates as an autonomous cloud spending decision agent. It a
 
 ### Architecture
 - **Production Mode (`ENVIRONMENT=production`)**:
-  - `AUTH_ENABLED=true` by default. Startup fails if unauthenticated mode is attempted without explicit `ALLOW_UNAUTHENTICATED_IN_PRODUCTION=true`.
+  - `AUTH_ENABLED=true` is required. Startup fails if OIDC/JWKS settings are missing. There is no authentication bypass.
   - Validates JWT tokens against OIDC identity provider (AWS Cognito, Auth0, Okta, Keycloak).
   - Claims checked: `iss` (issuer), `aud` (audience), `exp` (expiration), signature verification via JWKS.
   - Role-Based Access Control:
@@ -37,6 +37,13 @@ CloudCost Sentinel operates as an autonomous cloud spending decision agent. It a
   - An explicit developer principal (`lead-cloud-engineer@company.internal`) is used with both viewer and reviewer privileges.
   - The API health endpoint (`/api/health`) displays a prominent warning: `auth.warning: "Authentication is disabled: development principal active."`
   - The UI displays `SIMULATED / DEMO MODE`.
+
+### Public Simulated Demo
+- `ENVIRONMENT=demo` is an explicit shared public demo, not a tenant-secure production mode.
+- It requires mock Decider and report providers, prohibits Cost Explorer and real notifications, accepts synthetic scenario IDs only, and marks the shared review queue as demo data.
+- Per-process limits do not coordinate across multiple replicas. Use one instance or add shared rate limiting before scaling.
+- SQLite needs a persistent mounted disk for records to survive redeploys. `DATABASE_URL` is rejected because PostgreSQL is not implemented.
+- The frontend does not yet implement OIDC sign-in. Do not deploy it as an authenticated dashboard until that flow exists.
 
 ---
 

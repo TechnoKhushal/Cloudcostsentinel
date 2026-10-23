@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from strands_decider.schema import (
@@ -81,6 +83,45 @@ class AnalyzeRequest(BaseModel):
     custom_anomaly: Optional[CostAnomaly] = None
 
 
+_request_hits: Dict[tuple[str, str], List[float]] = {}
+
+
+@app.middleware("http")
+async def request_safety_limits(request: Request, call_next):
+    """Bound JSON payloads and public demo request rates per process and client IP."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 65_536:
+                return JSONResponse(status_code=413, content={"detail": "Request body exceeds 64 KiB."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+
+    if settings.ENVIRONMENT == "demo" and request.method == "POST":
+        if len(_request_hits) > 10_000:
+            now = time.monotonic()
+            for stale_key in list(_request_hits):
+                remaining = [hit for hit in _request_hits[stale_key] if now - hit < 60]
+                if remaining:
+                    _request_hits[stale_key] = remaining
+                else:
+                    del _request_hits[stale_key]
+            if len(_request_hits) > 10_000:
+                return JSONResponse(status_code=429, content={"detail": "Demo request limiter is at capacity. Try again later."})
+        path = request.url.path
+        limit = 10 if path == "/api/analyze" else 30 if path.startswith("/api/approvals/") else None
+        if limit:
+            client = request.client.host if request.client else "unknown"
+            key = (client, path)
+            now = time.monotonic()
+            recent = [hit for hit in _request_hits.get(key, []) if now - hit < 60]
+            if len(recent) >= limit:
+                return JSONResponse(status_code=429, content={"detail": "Demo request limit reached. Try again in one minute."})
+            recent.append(now)
+            _request_hits[key] = recent
+    return await call_next(request)
+
+
 class ApprovalDecisionRequest(BaseModel):
     action: str = Field(..., pattern="^(approved|rejected)$")
     reviewed_by: Optional[str] = Field(default=None, description="Ignored if authenticated; server uses token principal.")
@@ -97,7 +138,6 @@ async def get_health_live() -> Dict[str, str]:
 
 
 @app.get("/api/health", tags=["Health"])
-@app.get("/api/health/ready", tags=["Health"])
 async def get_health() -> Dict[str, Any]:
     """Granular non-secret provider readiness and configuration status.
 
@@ -125,16 +165,19 @@ async def get_health() -> Dict[str, Any]:
         bedrock_state = "configured_unverified"
         bedrock_model = settings.BEDROCK_MODEL_ID
 
+    provider_unverified = decider_state == "configured_unverified" or bedrock_state == "configured_unverified"
     return {
-        "status": "healthy",
+        "status": "simulated" if settings.ENVIRONMENT == "demo" else ("degraded" if provider_unverified else "healthy"),
         "service": "CloudCost Sentinel",
         "version": "1.0.0",
         "environment": settings.ENVIRONMENT,
         "auth": {
             "enabled": settings.AUTH_ENABLED,
-            "mode": "jwt_bearer" if settings.AUTH_ENABLED else "development_bypass",
+            "mode": "jwt_bearer" if settings.AUTH_ENABLED else ("explicit_demo" if settings.ENVIRONMENT == "demo" else "development_bypass"),
             "warning": (
-                "Authentication is disabled: development principal active."
+                "Shared public demo: approvals and records are synthetic."
+                if settings.ENVIRONMENT == "demo"
+                else "Authentication is disabled: development principal active."
                 if not settings.AUTH_ENABLED
                 else None
             ),
@@ -145,7 +188,6 @@ async def get_health() -> Dict[str, Any]:
                 "state": decider_state,
                 "model_id": reported_model,
                 "min_confidence_threshold": settings.DECIDER_MIN_CONFIDENCE,
-                "endpoint": settings.STRANDS_DECIDER_URL,
             },
             "bedrock": {
                 "provider": settings.BEDROCK_PROVIDER,
@@ -162,6 +204,29 @@ async def get_health() -> Dict[str, Any]:
             },
         },
         "safety_guarantee": "Read-only telemetry and decision guidance. Zero automatic cloud mutation.",
+    }
+
+
+@app.get("/api/health/ready", tags=["Health"])
+async def get_health_ready(response: Response) -> Dict[str, Any]:
+    """Readiness reflects local storage and required production provider state."""
+    database_ready = db.check_ready()
+    decider_state = "simulated" if settings.DECIDER_PROVIDER == "mock" else "configured_unverified"
+    bedrock_state = "simulated" if settings.BEDROCK_PROVIDER == "mock" else "configured_unverified"
+    providers_ready = settings.ENVIRONMENT == "demo" or (
+        decider_state == "connected" and bedrock_state == "connected"
+    )
+    ready = database_ready and providers_ready
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {
+        "status": "ready" if ready else "not_ready",
+        "environment": settings.ENVIRONMENT,
+        "checks": {
+            "database": "connected" if database_ready else "unavailable",
+            "decider": decider_state,
+            "bedrock": bedrock_state,
+        },
     }
 
 
@@ -192,15 +257,28 @@ async def analyze_anomaly(
         req.use_aws_cost_explorer,
     )
 
+    if settings.ENVIRONMENT == "demo" and (req.use_aws_cost_explorer or req.custom_anomaly is not None):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public demo accepts synthetic scenario IDs only; live or custom cost data is disabled.",
+        )
+
     # 1. Fetch telemetry
+    cost_data_source = "synthetic_scenario"
+    data_warnings: List[str] = []
     if req.use_aws_cost_explorer:
         anomaly, err = cost_explorer.fetch_recent_costs()
-        if err or not anomaly:
+        cost_data_source = "aws_cost_explorer"
+        if err and err.startswith("PARTIAL_DATA:") and anomaly is not None:
+            data_warnings.append(err)
+            anomaly.metrics.uncertainty_flag = True
+        elif err or not anomaly:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"AWS Cost Explorer query failed: {err}",
             )
     elif req.custom_anomaly:
+        cost_data_source = "custom_supplied"
         anomaly = req.custom_anomaly
     else:
         scenario_id = req.scenario_id or "compute_spike"
@@ -247,6 +325,9 @@ async def analyze_anomaly(
         "report": report,
         "approval": approval_item,
         "is_simulated": anomaly.is_simulated,
+        "cost_data_source": cost_data_source,
+        "partial_data": bool(data_warnings),
+        "data_warnings": data_warnings,
     }
 
 

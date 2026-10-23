@@ -27,13 +27,18 @@ function apiUrl(path: string): string {
 
 async function requestJson<T>(path: string, init: RequestInit = {}, operation = "API request"): Promise<T> {
   const url = apiUrl(path);
+  const timeout = AbortSignal.timeout(20_000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   let response: Response;
   try {
     const headers = new Headers(init.headers);
-    response = await fetch(url, { ...init, headers });
+    response = await fetch(url, { ...init, headers, signal });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
-    throw new Error("Cannot reach the backend. Check its availability and VITE_API_BASE_URL, then retry.");
+    if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error("Backend request timed out. The service may be starting; retry in a few seconds.");
+    }
+    throw new Error("Cannot reach the backend. Check network access, the backend CORS origin allowlist, and VITE_API_BASE_URL; retry if the service is waking.");
   }
 
   const body = await response.text();
@@ -47,7 +52,12 @@ async function requestJson<T>(path: string, init: RequestInit = {}, operation = 
     const detail = payload && typeof payload === "object" && "detail" in payload
       ? String((payload as { detail: unknown }).detail)
       : undefined;
-    throw new Error(detail || (body && !payload
+    const statusMessage = response.status === 401 ? "Authentication required. Sign in with the configured identity provider."
+      : response.status === 403 ? "This account is not allowed to perform this action."
+      : response.status === 404 ? "The backend route was not found. Check VITE_API_BASE_URL and API version."
+      : response.status >= 500 ? "The backend failed while handling this request. Retry or contact the service operator."
+      : undefined;
+    throw new Error(detail || statusMessage || (body && !payload
       ? `${operation} returned an unexpected non-JSON response (${response.status}). Check the backend URL.`
       : `${operation} failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`));
   }
@@ -55,12 +65,12 @@ async function requestJson<T>(path: string, init: RequestInit = {}, operation = 
   return payload as T;
 }
 
-export async function fetchHealth(): Promise<HealthInfo> {
-  return requestJson<HealthInfo>("/api/health", {}, "Health check");
+export async function fetchHealth(signal?: AbortSignal): Promise<HealthInfo> {
+  return requestJson<HealthInfo>("/api/health", { signal }, "Health check");
 }
 
-export async function fetchScenarios(): Promise<Scenario[]> {
-  return requestJson<Scenario[]>("/api/demo/scenarios", {}, "Loading scenarios");
+export async function fetchScenarios(signal?: AbortSignal): Promise<Scenario[]> {
+  return requestJson<Scenario[]>("/api/demo/scenarios", { signal }, "Loading scenarios");
 }
 
 export async function runAnalysis(
@@ -73,6 +83,9 @@ export async function runAnalysis(
   report: BedrockReport;
   approval: ApprovalItem | null;
   is_simulated: boolean;
+  cost_data_source: string;
+  partial_data: boolean;
+  data_warnings: string[];
 }> {
   return requestJson<{
     anomaly: CostAnomaly;
@@ -80,6 +93,9 @@ export async function runAnalysis(
     report: BedrockReport;
     approval: ApprovalItem | null;
     is_simulated: boolean;
+    cost_data_source: string;
+    partial_data: boolean;
+    data_warnings: string[];
   }>("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -95,8 +111,8 @@ export async function fetchDecisions(): Promise<DeciderResponseTrace[]> {
   return requestJson<DeciderResponseTrace[]>("/api/decisions?limit=15", {}, "Loading decisions");
 }
 
-export async function fetchApprovals(): Promise<ApprovalItem[]> {
-  return requestJson<ApprovalItem[]>("/api/approvals", {}, "Loading approvals");
+export async function fetchApprovals(signal?: AbortSignal): Promise<ApprovalItem[]> {
+  return requestJson<ApprovalItem[]>("/api/approvals", { signal }, "Loading approvals");
 }
 
 export async function submitApprovalDecision(
