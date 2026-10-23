@@ -25,4 +25,3 @@ export const ApprovalsFeed = ({ approvals, onDecide, pendingIds = new Set(), err
     })}
   </section>
 );
-};

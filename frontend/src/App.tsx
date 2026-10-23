@@ -37,9 +37,7 @@ export const App = () => {
   const resourceRequest = useRef<AbortController | null>(null);
   const toastTimer = useRef<number | null>(null);
   const selectedIdRef = useRef(selectedScenarioId);
-  selectedIdRef.current = selectedScenarioId;
   const hasAnomalyRef = useRef(Boolean(anomaly));
-  hasAnomalyRef.current = Boolean(anomaly);
 
   useEffect(() => {
     mounted.current = true;
@@ -66,6 +64,7 @@ export const App = () => {
     try {
       const result = await runAnalysis(scenarioId, false, controller.signal);
       if (!mounted.current || controller.signal.aborted) return;
+      hasAnomalyRef.current = true;
       setAnomaly(result.anomaly);
       setDecision(result.decision);
       setDecisionHistory((current) => [result.decision, ...current.filter((item) => item.decision_id !== result.decision.decision_id)].slice(0, 15));
@@ -82,7 +81,6 @@ export const App = () => {
   }, []);
 
   const refreshResources = useCallback(async (signal: AbortSignal, runInitialAnalysis = false) => {
-    setRefreshing(true);
     const results = await Promise.allSettled([
       fetchHealth(signal), fetchScenarios(signal), fetchDecisions(signal), fetchApprovals(signal),
     ]);
@@ -124,6 +122,7 @@ export const App = () => {
   }, [refreshResources]);
 
   const handleRefresh = () => {
+    setRefreshing(true);
     resourceRequest.current?.abort();
     const controller = new AbortController();
     resourceRequest.current = controller;
