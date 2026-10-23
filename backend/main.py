@@ -21,7 +21,7 @@ from .models.decision import DeciderResponseTrace
 from .models.report import BedrockReport
 from .services.aws_cost_explorer import AWSCostExplorerService
 from .services.cost_analyzer import CostScenarioRegistry
-from .services.confidence import normalized_confidence
+from .services.confidence import mock_confidence
 from .services.decider_client import DeciderClient
 from .services.strands_agent import StrandsBedrockNarrator
 
@@ -425,7 +425,7 @@ if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
                     choice = "monitor" if "monitor" in opts else opts[0]
                     probs = {opt: (0.88 if opt == choice else (0.12 / max(1, len(opts) - 1))) for opt in opts}
 
-                conf = normalized_confidence(probs.values())
+                conf = mock_confidence(probs.values())
                 answers[q_name] = {
                     "type": "choice",
                     "choice": choice,

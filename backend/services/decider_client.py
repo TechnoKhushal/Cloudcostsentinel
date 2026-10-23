@@ -16,7 +16,7 @@ from ..models.decision import (
     DeciderQuestionSpec,
     DeciderResponseTrace,
 )
-from .confidence import normalized_confidence
+from .confidence import mock_confidence
 
 logger = logging.getLogger("cloudcost_sentinel.decider")
 
@@ -185,13 +185,26 @@ class DeciderClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                answer = data.get("answers", {}).get("operational_response") if isinstance(data, dict) else None
+                if (
+                    not isinstance(data, dict)
+                    or not isinstance(data.get("model"), str)
+                    or not isinstance(data.get("answers"), dict)
+                    or not isinstance(data.get("usage"), dict)
+                ):
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider returned an invalid System One response"
+                usage = data["usage"]
+                if any(
+                    not isinstance(usage.get(field), int) or usage[field] < 0
+                    for field in ("input_tokens", "output_tokens")
+                ):
+                    return "request_approval", {}, 0.0, self.model_id, True, "Decider returned invalid token usage"
+                answer = data["answers"].get("operational_response")
                 if not isinstance(answer, dict) or answer.get("type") != "choice":
                     return "request_approval", {}, 0.0, self.model_id, True, "Unexpected answer type from Decider"
 
                 # --- Strict validation of model response ---
                 action = answer.get("choice")
-                if action not in ALLOWED_ACTIONS:
+                if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
                     return "request_approval", {}, 0.0, self.model_id, True, (
                         f"Decider returned unrecognised action '{action}'; must be one of {ALLOWED_ACTIONS}"
                     )
@@ -224,7 +237,7 @@ class DeciderClient:
                     action,  # type: ignore[return-value]
                     probs,
                     conf,
-                    str(data.get("model", self.model_id)),
+                    data["model"],
                     False,
                     None,
                 )
@@ -263,7 +276,7 @@ class DeciderClient:
         # If measurement is uncertain or sparse data, create low confidence distribution below safety threshold
         if state.uncertainty_flag:
             probs = {"monitor": 0.34, "notify_owner": 0.33, "request_approval": 0.33}
-            conf = normalized_confidence(probs.values())  # ~ 0.015 (below 0.65 threshold)
+            conf = mock_confidence(probs.values())  # 0.34, below the 0.65 threshold
             return "request_approval", probs, conf, "demo-policy-evaluator-v1", False, None
 
         # Critical service with high spend spike (+50% or +$400/day) or unassigned owner -> request_approval
@@ -281,7 +294,7 @@ class DeciderClient:
             probs = {"monitor": 0.86, "notify_owner": 0.10, "request_approval": 0.04}
             choice = "monitor"
 
-        conf = normalized_confidence(probs.values())
+        conf = mock_confidence(probs.values())
         return choice, probs, conf, "demo-policy-evaluator-v1", False, None
 
     def _route_operational_response(
