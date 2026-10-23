@@ -83,7 +83,7 @@ export const App: React.FC = () => {
         setError(err.message || "Analysis failed.");
       }
     } finally {
-      if (isMountedRef.current) {
+      if (isMountedRef.current && abortControllerRef.current === controller) {
         setLoading(false);
       }
     }
@@ -93,18 +93,22 @@ export const App: React.FC = () => {
   useEffect(() => {
     async function init() {
       try {
-        const [healthData, scenariosData, approvalsData] = await Promise.all([
-          fetchHealth().catch(() => null),
-          fetchScenarios().catch(() => []),
-          fetchApprovals().catch(() => []),
+        const [healthResult, scenariosResult, approvalsResult] = await Promise.allSettled([
+          fetchHealth(), fetchScenarios(), fetchApprovals(),
         ]);
         if (!isMountedRef.current) return;
-        setHealth(healthData);
-        setScenarios(scenariosData);
-        setApprovals(approvalsData);
+        if (healthResult.status === "fulfilled") setHealth(healthResult.value);
+        if (scenariosResult.status === "fulfilled") setScenarios(scenariosResult.value);
+        if (approvalsResult.status === "fulfilled") setApprovals(approvalsResult.value);
+        const failures = [healthResult, scenariosResult, approvalsResult]
+          .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+          .map((result) => result.reason instanceof Error ? result.reason.message : "A dashboard service could not be loaded.");
+        if (failures.length) setError(failures.join(" "));
 
-        // Run initial analysis on default scenario
-        await executeAnalysis("compute_spike");
+        // Do not start a demo analysis when the backend could not supply its scenarios.
+        if (scenariosResult.status === "fulfilled" && scenariosResult.value.length > 0) {
+          await executeAnalysis("compute_spike");
+        }
       } catch (err: any) {
         if (isMountedRef.current) {
           setError(err.message || "Failed to initialize application.");

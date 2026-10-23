@@ -1,4 +1,27 @@
-# React + TypeScript + Vite
+# CloudCost Sentinel frontend
+
+## Vercel deployment
+
+- Root directory: `frontend`
+- Framework: Vite
+- Install command: `npm ci`
+- Build command: `npm run build`
+- Output directory: `dist`
+- Set `VITE_API_BASE_URL` in both Preview and Production to the backend origin only, for example `https://your-api.example.com` (no `/api` suffix).
+- Redeploy after changing this variable; Vite embeds it at build time. It is public and must never contain secrets.
+- Configure the backend's exact HTTPS CORS origin for the deployed Vercel domain.
+
+The API client intentionally fails with an actionable message in production if `VITE_API_BASE_URL` is missing or contains a path. It does not send production requests to the Vercel origin. In development it uses `http://127.0.0.1:8000`.
+
+The backend's production mode requires OIDC bearer tokens. This frontend currently has no OIDC sign-in flow, so a production backend configured with authentication cannot be used interactively from this dashboard yet. Do not enter a fabricated token in browser storage; implement/configure a complete OIDC client before enabling authenticated dashboard access.
+
+## Local development
+
+From this directory, run `npm ci`, then `npm run dev`. Start FastAPI separately. Run `npm run lint` and `npm run build` before deployment.
+
+---
+
+## Vite template notes
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 

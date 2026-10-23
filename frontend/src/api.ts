@@ -1,45 +1,66 @@
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, BedrockReport, HealthInfo, Scenario } from "./types";
 
-// Configurable API base URL; in production builds falls back to same-origin (/api) if VITE_API_BASE_URL is not set
-const getApiBase = (): string => {
+// VITE_API_BASE_URL is the backend origin only, with no /api suffix.
+export const getApiBase = (): string => {
   const envUrl = import.meta.env.VITE_API_BASE_URL;
   if (envUrl !== undefined && envUrl !== "") {
-    return envUrl.replace(/\/+$/, "");
+    try {
+      const parsed = new URL(envUrl.trim());
+      if (!/^https?:$/.test(parsed.protocol) || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+        throw new Error();
+      }
+      return parsed.origin;
+    } catch {
+      throw new Error("VITE_API_BASE_URL must be an HTTP(S) backend origin without a path, query, or fragment.");
+    }
   }
   // In development, default to local FastAPI dev server
   if (import.meta.env.DEV) {
     return "http://127.0.0.1:8000";
   }
-  return "";
+  throw new Error("Backend URL is not configured. Set VITE_API_BASE_URL to your API origin and redeploy the frontend.");
 };
 
-const API_BASE = getApiBase();
+function apiUrl(path: string): string {
+  return `${getApiBase()}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
-function getAuthHeaders(): HeadersInit {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  const token = localStorage.getItem("sentinel_token");
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+async function requestJson<T>(path: string, init: RequestInit = {}, operation = "API request"): Promise<T> {
+  const url = apiUrl(path);
+  let response: Response;
+  try {
+    const headers = new Headers(init.headers);
+    response = await fetch(url, { ...init, headers });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new Error("Cannot reach the backend. Check its availability and VITE_API_BASE_URL, then retry.");
   }
-  return headers;
+
+  const body = await response.text();
+  let payload: unknown;
+  try {
+    payload = body ? JSON.parse(body) : undefined;
+  } catch {
+    payload = undefined;
+  }
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? String((payload as { detail: unknown }).detail)
+      : undefined;
+    throw new Error(detail || (body && !payload
+      ? `${operation} returned an unexpected non-JSON response (${response.status}). Check the backend URL.`
+      : `${operation} failed (${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`));
+  }
+  if (!payload) throw new Error(`${operation} returned an empty or invalid JSON response.`);
+  return payload as T;
 }
 
 export async function fetchHealth(): Promise<HealthInfo> {
-  const res = await fetch(`${API_BASE}/api/health`, {
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Health check failed: ${res.statusText}`);
-  return res.json();
+  return requestJson<HealthInfo>("/api/health", {}, "Health check");
 }
 
 export async function fetchScenarios(): Promise<Scenario[]> {
-  const res = await fetch(`${API_BASE}/api/demo/scenarios`, {
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Failed to load scenarios: ${res.statusText}`);
-  return res.json();
+  return requestJson<Scenario[]>("/api/demo/scenarios", {}, "Loading scenarios");
 }
 
 export async function runAnalysis(
@@ -53,36 +74,29 @@ export async function runAnalysis(
   approval: ApprovalItem | null;
   is_simulated: boolean;
 }> {
-  const res = await fetch(`${API_BASE}/api/analyze`, {
+  return requestJson<{
+    anomaly: CostAnomaly;
+    decision: DeciderResponseTrace;
+    report: BedrockReport;
+    approval: ApprovalItem | null;
+    is_simulated: boolean;
+  }>("/api/analyze", {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: { "Content-Type": "application/json" },
     signal,
     body: JSON.stringify({
       scenario_id: scenarioId,
       use_aws_cost_explorer: useAwsCostExplorer,
     }),
-  });
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Analysis failed: ${res.statusText}`);
-  }
-  return res.json();
+  }, "Analysis");
 }
 
 export async function fetchDecisions(): Promise<DeciderResponseTrace[]> {
-  const res = await fetch(`${API_BASE}/api/decisions?limit=15`, {
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Failed to load decisions: ${res.statusText}`);
-  return res.json();
+  return requestJson<DeciderResponseTrace[]>("/api/decisions?limit=15", {}, "Loading decisions");
 }
 
 export async function fetchApprovals(): Promise<ApprovalItem[]> {
-  const res = await fetch(`${API_BASE}/api/approvals`, {
-    headers: getAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Failed to load approvals: ${res.statusText}`);
-  return res.json();
+  return requestJson<ApprovalItem[]>("/api/approvals", {}, "Loading approvals");
 }
 
 export async function submitApprovalDecision(
@@ -90,17 +104,12 @@ export async function submitApprovalDecision(
   action: "approved" | "rejected",
   notes: string = "Reviewed in CloudCost Sentinel dashboard."
 ): Promise<ApprovalItem> {
-  const res = await fetch(`${API_BASE}/api/approvals/${approvalId}/decision`, {
+  return requestJson<ApprovalItem>(`/api/approvals/${encodeURIComponent(approvalId)}/decision`, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       action,
       notes,
     }),
-  });
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Approval decision failed: ${res.statusText}`);
-  }
-  return res.json();
+  }, "Recording approval");
 }

@@ -221,19 +221,10 @@ class DatabaseRepository:
         """
         now_str = datetime.now(timezone.utc).isoformat()
         with self._get_connection() as conn:
-            # First fetch current record to verify existence and check for replay
-            cursor = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
-            current = cursor.fetchone()
-            if not current:
-                return None
-
-            if current["status"] != "pending":
-                raise ApprovalConflictError(
-                    f"Approval item '{approval_id}' was already reviewed with status '{current['status']}' "
-                    f"by {current['reviewed_by']} at {current['reviewed_at']}."
-                )
-
-            conn.execute(
+            # Make the conditional update the first database operation. It is
+            # the atomic compare-and-set, so competing reviewers cannot both
+            # read "pending" and then race to report success.
+            cursor = conn.execute(
                 """
                 UPDATE approvals
                 SET status = ?, reviewed_by = ?, reviewed_at = ?, notes = ?
@@ -241,6 +232,17 @@ class DatabaseRepository:
                 """,
                 (status, reviewed_by, now_str, notes, approval_id),
             )
+            # The UPDATE predicate is the concurrency gate.  A competing request
+            # may have observed the same pending row above, so only the request
+            # that actually changes one row is allowed to report success.
+            if cursor.rowcount != 1:
+                cursor = conn.execute("SELECT status FROM approvals WHERE id = ?", (approval_id,))
+                latest = cursor.fetchone()
+                if latest is None:
+                    return None
+                raise ApprovalConflictError(
+                    f"Approval item '{approval_id}' was already reviewed with status '{latest['status']}'."
+                )
             cursor = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,))
             row = cursor.fetchone()
             if not row:
