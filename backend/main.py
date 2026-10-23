@@ -61,6 +61,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.get("/", tags=["Health"], include_in_schema=False)
+async def get_root() -> Dict[str, str]:
+    """Give operators a harmless pointer to the liveness endpoint at the service root."""
+    return {"service": "CloudCost Sentinel API", "health": "/api/health/live"}
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,

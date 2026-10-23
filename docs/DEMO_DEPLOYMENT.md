@@ -4,7 +4,13 @@ This mode is an opt-in, shared demonstration using synthetic scenarios, simulate
 
 ## Render backend
 
-Use the repository root and the Dockerfile, or configure the native Python service with Python 3.11, `pip install -r requirements.txt`, and:
+Use the repository root and the Dockerfile. The checked-in `.python-version` pins the native Render runtime to Python 3.11, matching CI and Docker. For a native Python service, set the build command to:
+
+```sh
+pip install -r requirements.txt && pip install --no-deps "strands-decider==0.2.0"
+```
+
+The second install provides the API wire schema without the optional local model runtime and its heavyweight dependencies. To run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
 
 ```sh
 uvicorn backend.main:app --host 0.0.0.0 --port "$PORT"
@@ -24,6 +30,8 @@ HOST=0.0.0.0
 DATABASE_PATH=/var/data/sentinel.db
 CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
+
+Do not add `ALLOW_MOCK_IN_PRODUCTION`; the application does not read that legacy variable. Production startup already rejects mock providers.
 
 Attach a persistent disk mounted at `/var/data`; without it, SQLite data is disposable on redeploy/restart. Do not configure `DATABASE_URL`: the current repository does not implement PostgreSQL and refuses to start in any environment when that unused variable is set. This demo uses synthetic scenario IDs only; the API rejects custom anomaly payloads and Cost Explorer requests.
 

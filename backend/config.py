@@ -104,9 +104,13 @@ class Settings(BaseModel):
         """Validate startup configuration to prevent unsafe states."""
         if self.ENVIRONMENT not in {"development", "demo", "production"}:
             raise ValueError("ENVIRONMENT must be development, demo, or production.")
-        if self.ENVIRONMENT == "development" and os.getenv("RENDER"):
-            raise ValueError("Render deployment must explicitly select ENVIRONMENT=demo or ENVIRONMENT=production.")
-        if os.getenv("RENDER") and self.HOST != "0.0.0.0":
+        is_render = os.getenv("RENDER", "").lower() == "true"
+        if self.ENVIRONMENT == "development" and is_render:
+            raise ValueError(
+                "Render requires an explicit ENVIRONMENT=demo or ENVIRONMENT=production. "
+                "Set ENVIRONMENT=demo for the public synthetic demo; development mode is refused on Render."
+            )
+        if is_render and self.HOST != "0.0.0.0":
             raise ValueError("Render deployment requires HOST=0.0.0.0.")
         if not (0.0 < self.DECIDER_MIN_CONFIDENCE <= 1.0):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
@@ -181,7 +185,7 @@ class Settings(BaseModel):
                 raise ValueError("ENVIRONMENT=demo allows only disabled or simulated notifications.")
             if self.ENABLE_TEST_FIXTURE_ENDPOINT:
                 raise ValueError("ENVIRONMENT=demo must not enable the Decider test-fixture endpoint.")
-            if os.getenv("RENDER") and (
+            if is_render and (
                 self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH)
             ):
                 raise ValueError("Render demo requires DATABASE_PATH on an explicitly mounted persistent disk.")
@@ -218,7 +222,7 @@ class Settings(BaseModel):
             if (
                 (parsed.scheme != "https" and not is_local_demo_origin)
                 or not parsed.netloc
-                or parsed.path not in ("", "/")
+                or parsed.path != ""
                 or parsed.query
                 or parsed.fragment
                 or parsed.username

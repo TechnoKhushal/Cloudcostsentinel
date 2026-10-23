@@ -220,6 +220,14 @@ async def test_api_health_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_api_root_returns_service_and_liveness_pointer():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/")
+    assert resp.status_code == 200
+    assert resp.json() == {"service": "CloudCost Sentinel API", "health": "/api/health/live"}
+
+
+@pytest.mark.asyncio
 async def test_api_scenarios_endpoint():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -370,6 +378,9 @@ def test_cors_origins_parsing():
     assert len(parsed_csv) == 3
     assert "https://app.example.internal" in parsed_csv
 
+    vercel_origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
+    assert parse_cors_origins(vercel_origin) == [vercel_origin]
+
 
 def test_database_is_simulated_preservation(tmp_path):
     test_db_path = str(tmp_path / "test_sentinel.db")
@@ -489,6 +500,31 @@ def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
             AUTH_ENABLED=False,
             CORS_ORIGINS=["*"],
         ).validate_startup()
+
+    with pytest.raises(ValueError, match="exact HTTPS origins"):
+        Settings(
+            ENVIRONMENT="demo",
+            AUTH_ENABLED=False,
+            CORS_ORIGINS=["https://sentinel.example/"],
+        ).validate_startup()
+
+
+def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypatch):
+    monkeypatch.setenv("RENDER", "true")
+    with pytest.raises(ValueError, match="explicit ENVIRONMENT=demo or ENVIRONMENT=production"):
+        Settings(ENVIRONMENT="development").validate_startup()
+
+    demo = Settings(
+        ENVIRONMENT="demo",
+        AUTH_ENABLED=False,
+        CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
+        DECIDER_PROVIDER="mock",
+        BEDROCK_PROVIDER="mock",
+        AWS_COST_EXPLORER_ENABLED=False,
+        NOTIFICATION_PROVIDER="disabled",
+        DATABASE_PATH="/var/data/sentinel.db",
+    )
+    demo.validate_startup()
 
 
 def test_production_rejects_sqlite_database_url():

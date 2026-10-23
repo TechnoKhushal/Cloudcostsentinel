@@ -25,7 +25,7 @@ If the app is intended to be public, review Vercel Deployment Protection for the
 
 ## Render backend settings for the simulated demo
 
-Deploy the current repository `main` revision as the backend web service. For a Docker deployment, use the repository Dockerfile. For a native Python service, install `requirements.txt` and use:
+Deploy the current repository revision as the backend web service. For a Docker deployment, use the repository Dockerfile. For a native Python service, use Python 3.11 (the repository `.python-version` pins Render to the same runtime as CI and Docker). Set the build command to `pip install -r requirements.txt && pip install --no-deps "strands-decider==0.2.0"`; the second command installs the API schema without the optional local model runtime. Use this start command:
 
 ```text
 uvicorn backend.main:app --host 0.0.0.0 --port $PORT
@@ -45,6 +45,8 @@ HOST=0.0.0.0
 DATABASE_PATH=/var/data/sentinel.db
 CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
+
+Do not configure `ALLOW_MOCK_IN_PRODUCTION`; it is not read by this application. Production startup already rejects mock providers.
 
 If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`; do not set `DATABASE_URL` because PostgreSQL is not implemented. Attach a persistent disk mounted at `/var/data`. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); current startup validation refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
 
