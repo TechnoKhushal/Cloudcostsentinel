@@ -1,6 +1,6 @@
 # Vercel + Render deployment
 
-This repository's public demo is synthetic and shared. It uses mock Decider and report providers, SQLite on a persistent Render disk, and application-only approval records. It never applies changes to AWS. Do not configure AWS Cost Explorer or real notification providers for this demo.
+This repository's public demo is synthetic and shared. It uses mock Decider and report providers, SQLite, and application-only approval records. The current Render configuration uses ephemeral `/tmp` storage unless a writable persistent disk is verified and explicitly configured. It never applies changes to AWS. Do not configure AWS Cost Explorer or real notification providers for this demo.
 
 ## Confirmed connectivity findings (2026-10-24)
 
@@ -42,13 +42,13 @@ AWS_COST_EXPLORER_ENABLED=false
 NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
 HOST=0.0.0.0
-DATABASE_PATH=/var/data/sentinel.db
+DATABASE_PATH=/tmp/cloudcost-sentinel.db
 CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
 
 Do not configure `ALLOW_MOCK_IN_PRODUCTION`; it is not read by this application. Production startup already rejects mock providers.
 
-If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`; do not set `DATABASE_URL` because PostgreSQL is not implemented. Attach a persistent disk mounted at `/var/data`. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); current startup validation refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
+If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`; do not set `DATABASE_URL` because PostgreSQL is not implemented. `/tmp/cloudcost-sentinel.db` is ephemeral and records can disappear on restart/redeploy. To preserve state, attach and verify a writable persistent disk first, then set `DATABASE_PATH` to its mount; a configured unwritable path causes a clear startup failure, never a fallback. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); current startup validation refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
 
 Do not copy these demo settings into a real production deployment. Production requires validated OIDC/JWKS, non-mock providers, and persistent storage; the browser OIDC sign-in flow is not implemented.
 

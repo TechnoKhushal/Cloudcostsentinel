@@ -130,7 +130,7 @@ Open `http://localhost:5173` in your browser.
 | `AWS_COST_EXPLORER_ENABLED`| `false` | Read-only live AWS Cost Explorer queries (disabled by default) |
 | `AUTH_ENABLED` | `false` | Local development only. Public production requires `true` and complete OIDC/JWKS configuration. Explicit `demo` mode is synthetic-only. |
 | `NOTIFICATION_PROVIDER` | `mock` | `disabled`, `mock`, or `sns` (AWS Simple Notification Service) |
-| `DATABASE_PATH` | `backend/data/sentinel.db` | SQLite path. Hosted use requires a persistent mounted disk. |
+| `DATABASE_PATH` | `backend/data/sentinel.db` locally; `/tmp/cloudcost-sentinel.db` for Render demo when unset | SQLite path. Render demo temp storage is ephemeral; production persistence requires a verified writable mounted disk. |
 | `DATABASE_URL` | unset | Unsupported; startup refuses it rather than silently ignoring it. |
 
 Detailed documentation:

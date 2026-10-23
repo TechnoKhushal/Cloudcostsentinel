@@ -40,6 +40,23 @@ def main() -> int:
         status_code, scenarios = request_json(f"{origin}/api/demo/scenarios")
         assert status_code == 200 and isinstance(scenarios, list) and scenarios, "scenarios route returned no scenarios"
 
+        analysis_request = Request(
+            f"{origin}/api/analyze",
+            data=json.dumps({"scenario_id": "compute_spike", "use_aws_cost_explorer": False}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(analysis_request, timeout=30) as response:
+            assert response.status == 200, f"demo analysis returned {response.status}"
+            analysis = json.loads(response.read().decode("utf-8"))
+        assert analysis.get("is_simulated") is True, "analysis is not labelled simulated"
+        assert analysis.get("decision", {}).get("provider") == "mock-simulated", "decision provider is not the mock adapter"
+        assert analysis.get("report", {}).get("is_simulated") is True, "report is not labelled simulated"
+        status_code, decisions = request_json(f"{origin}/api/decisions?limit=1")
+        assert status_code == 200 and decisions, "decision read route returned no recent decisions"
+        status_code, approvals = request_json(f"{origin}/api/approvals")
+        assert status_code == 200 and isinstance(approvals, list), "approval read route failed"
+
         preflight = Request(
             f"{origin}/api/demo/scenarios",
             method="OPTIONS",
@@ -74,7 +91,7 @@ def main() -> int:
         print(f"Deployment smoke check failed: {error}", file=sys.stderr)
         return 1
 
-    print("Deployment smoke check passed: demo health, readiness, scenarios, and CORS.")
+    print("Deployment smoke check passed: demo health, readiness, scenarios, analysis, dashboard reads, and CORS.")
     return 0
 
 

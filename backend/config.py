@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urlsplit
 from dotenv import load_dotenv
@@ -10,6 +12,16 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 logger = logging.getLogger("cloudcost_sentinel.config")
+
+
+def default_database_path() -> str:
+    """Choose local storage; Render demo defaults to explicitly ephemeral storage."""
+    configured = os.getenv("DATABASE_PATH")
+    if configured is not None:
+        return configured
+    if os.getenv("RENDER", "").lower() == "true" and os.getenv("ENVIRONMENT") == "demo":
+        return "/tmp/cloudcost-sentinel.db"
+    return "backend/data/sentinel.db"
 
 
 def parse_cors_origins(raw: str) -> List[str]:
@@ -92,7 +104,7 @@ class Settings(BaseModel):
     )
 
     # Storage
-    DATABASE_PATH: str = Field(default_factory=lambda: os.getenv("DATABASE_PATH", "backend/data/sentinel.db"))
+    DATABASE_PATH: str = Field(default_factory=default_database_path)
     DATABASE_URL: Optional[str] = Field(default_factory=lambda: os.getenv("DATABASE_URL"))
 
     # Test fixture endpoint — disabled by default; never enable in production
@@ -102,6 +114,8 @@ class Settings(BaseModel):
 
     def validate_startup(self) -> None:
         """Validate startup configuration to prevent unsafe states."""
+        if not self.DATABASE_PATH.strip():
+            raise ValueError("DATABASE_PATH must name a non-empty SQLite file path.")
         if self.ENVIRONMENT not in {"development", "demo", "production"}:
             raise ValueError("ENVIRONMENT must be development, demo, or production.")
         is_render = os.getenv("RENDER", "").lower() == "true"
@@ -168,9 +182,16 @@ class Settings(BaseModel):
                     "Production startup refused: mock providers are prohibited; use ENVIRONMENT=demo for simulated providers."
                 )
 
-            if self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH):
+            database_path = Path(self.DATABASE_PATH).expanduser()
+            temporary_dir = Path(tempfile.gettempdir()).resolve()
+            try:
+                is_temporary = database_path.resolve().is_relative_to(temporary_dir)
+            except OSError:
+                is_temporary = False
+            if self.DATABASE_PATH == "backend/data/sentinel.db" or not database_path.is_absolute() or is_temporary:
                 raise ValueError(
-                    "Production startup requires DATABASE_PATH to be an explicit absolute path on a persistent disk."
+                    "Production startup requires DATABASE_PATH to be an absolute path outside temporary storage "
+                    "on a verified persistent disk."
                 )
 
         if self.ENVIRONMENT == "demo":
@@ -185,10 +206,11 @@ class Settings(BaseModel):
                 raise ValueError("ENVIRONMENT=demo allows only disabled or simulated notifications.")
             if self.ENABLE_TEST_FIXTURE_ENDPOINT:
                 raise ValueError("ENVIRONMENT=demo must not enable the Decider test-fixture endpoint.")
-            if is_render and (
-                self.DATABASE_PATH == "backend/data/sentinel.db" or not os.path.isabs(self.DATABASE_PATH)
-            ):
-                raise ValueError("Render demo requires DATABASE_PATH on an explicitly mounted persistent disk.")
+            if is_render and not os.path.isabs(self.DATABASE_PATH):
+                raise ValueError(
+                    "Render demo DATABASE_PATH must be absolute. Use /tmp/cloudcost-sentinel.db for ephemeral demo storage "
+                    "or configure an explicitly mounted writable disk for persistence."
+                )
 
         if self.DECIDER_PROVIDER == "http":
             decider_url = urlsplit(self.STRANDS_DECIDER_URL)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 import pytest
 import pytest_asyncio
@@ -11,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from backend.config import Settings, parse_cors_origins, settings
 from backend.database.db import DatabaseRepository, ApprovalConflictError
-from backend.main import app, db
+from backend.main import app, db, lifespan
 from backend.models.approval import ApprovalItem
 from backend.models.cost import CostAnomaly, SpendMetrics
 from backend.services.cost_analyzer import calculate_spend_metrics, CostScenarioRegistry
@@ -452,6 +454,87 @@ def test_database_is_simulated_preservation(tmp_path):
     updated = repo.update_approval_status("appr-live-001", "approved", "admin@company.internal")
     assert updated is not None
     assert updated.is_simulated is False
+
+
+def test_database_initializes_missing_parent_when_writable(tmp_path):
+    database_path = tmp_path / "nested" / "sqlite" / "sentinel.db"
+    repo = DatabaseRepository(str(database_path))
+    assert not database_path.parent.exists()
+
+    repo.initialize()
+
+    assert database_path.parent.is_dir()
+    assert database_path.is_file()
+    assert repo.check_ready() is True
+
+
+def test_database_initialization_propagates_permission_error(tmp_path, monkeypatch):
+    repo = DatabaseRepository(str(tmp_path / "not-created" / "sentinel.db"))
+
+    def deny_directory_creation(path, exist_ok=False):
+        raise PermissionError("simulated read-only database directory")
+
+    monkeypatch.setattr("backend.database.db.os.makedirs", deny_directory_creation)
+    with pytest.raises(PermissionError, match="read-only"):
+        repo.initialize()
+    assert repo._initialized is False
+
+
+def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephemeral(monkeypatch, tmp_path):
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("ENVIRONMENT", "demo")
+    monkeypatch.setenv("HOST", "0.0.0.0")
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("CORS_ORIGINS", "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app")
+    monkeypatch.setenv("DECIDER_PROVIDER", "mock")
+    monkeypatch.setenv("BEDROCK_PROVIDER", "mock")
+    monkeypatch.setenv("AWS_COST_EXPLORER_ENABLED", "false")
+    monkeypatch.setenv("NOTIFICATION_PROVIDER", "disabled")
+    monkeypatch.delenv("DATABASE_PATH", raising=False)
+
+    render_demo = Settings()
+    assert render_demo.DATABASE_PATH == "/tmp/cloudcost-sentinel.db"
+    render_demo.validate_startup()
+
+    configured_path = str(tmp_path / "explicit" / "sentinel.db")
+    monkeypatch.setenv("DATABASE_PATH", configured_path)
+    assert Settings().DATABASE_PATH == configured_path
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    production_path = str(tmp_path / "production" / "sentinel.db")
+    monkeypatch.setenv("DATABASE_PATH", production_path)
+    assert Settings().DATABASE_PATH == production_path
+
+    with pytest.raises(ValueError, match="outside temporary storage"):
+        Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://sentinel.example"],
+            AUTH_ENABLED=True,
+            AUTH_JWKS_URL="https://issuer.example/jwks.json",
+            AUTH_ISSUER="https://issuer.example",
+            AUTH_AUDIENCE="sentinel-api",
+            DECIDER_PROVIDER="http",
+            STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
+            BEDROCK_PROVIDER="bedrock",
+            DATABASE_PATH=str(Path(tempfile.gettempdir()) / "sentinel-prod.db"),
+        ).validate_startup()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_reports_actionable_database_permission_error(monkeypatch, tmp_path):
+    import unittest.mock
+
+    monkeypatch.delenv("RENDER", raising=False)
+    database_path = tmp_path / "denied" / "sentinel.db"
+    failing_repo = DatabaseRepository(str(database_path))
+    monkeypatch.setattr("backend.main.db", failing_repo)
+    monkeypatch.setattr(settings, "DATABASE_PATH", str(database_path))
+    with unittest.mock.patch.object(failing_repo, "initialize", side_effect=PermissionError("read-only")):
+        with pytest.raises(RuntimeError, match="SQLite could not initialize directory") as exc_info:
+            async with lifespan(app):
+                pass
+    assert str(database_path.parent) in str(exc_info.value)
+    assert "DATABASE_PATH=/tmp/cloudcost-sentinel.db" in str(exc_info.value)
 
 
 def test_concurrent_approval_transition_has_exactly_one_winner(tmp_path):

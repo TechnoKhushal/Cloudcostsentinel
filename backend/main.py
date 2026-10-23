@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import sqlite3
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
@@ -36,6 +40,23 @@ logger = logging.getLogger("cloudcost_sentinel.app")
 async def lifespan(app: FastAPI):
     """Validate startup settings strictly to prevent unsafe production configurations."""
     settings.validate_startup()
+    try:
+        db.initialize()
+    except (OSError, sqlite3.Error) as exc:
+        database_dir = Path(settings.DATABASE_PATH).expanduser().resolve().parent
+        logger.exception("SQLite initialization failed for directory %s", database_dir)
+        raise RuntimeError(
+            f"SQLite could not initialize directory '{database_dir}': {exc}. Confirm it exists and is writable. "
+            "For an ephemeral Render demo without a mounted disk, set DATABASE_PATH=/tmp/cloudcost-sentinel.db; "
+            "for persistent data, attach a writable disk and set DATABASE_PATH to its mount."
+        ) from None
+    db_file = Path(settings.DATABASE_PATH).expanduser().resolve()
+    temporary_dir = Path(tempfile.gettempdir()).resolve()
+    if settings.ENVIRONMENT == "demo" and db_file.is_relative_to(temporary_dir):
+        logger.warning(
+            "Demo SQLite database uses ephemeral temporary storage at %s; records can disappear on restart or redeploy.",
+            db_file,
+        )
     logger.info(
         "CloudCost Sentinel starting in environment='%s', auth_enabled=%s, decider_provider='%s', bedrock_provider='%s'",
         settings.ENVIRONMENT,
@@ -68,7 +89,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Services & Storage
+# Services & Storage. Repository construction is side-effect-free; schema/directory
+# initialization occurs in lifespan after environment validation.
 db = DatabaseRepository(settings.DATABASE_PATH)
 decider_client = DeciderClient()
 bedrock_narrator = StrandsBedrockNarrator()
@@ -459,7 +481,6 @@ else:
 # ------------------------------------------------------------------------------
 # Static Frontend Serving (Single-Container Production & Demo Builds)
 # ------------------------------------------------------------------------------
-import os
 from fastapi.staticfiles import StaticFiles
 
 frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
