@@ -2,12 +2,14 @@
 
 This repository's public demo is synthetic and shared. It uses mock Decider and report providers, SQLite, and application-only approval records. The current Render configuration uses ephemeral `/tmp` storage unless a writable persistent disk is verified and explicitly configured. It never applies changes to AWS. Do not configure AWS Cost Explorer or real notification providers for this demo.
 
-## Confirmed connectivity findings (2026-10-24)
+No additional third-party API was introduced by this repair. The default demo uses local simulated providers and requires no provider API key. Optional live AWS features are outside the free default: Bedrock inference is billed by model usage, AWS Cost Explorer charges $0.01 per API request, and SNS may charge for messages/delivery. Keep the demo provider settings below to avoid those API charges. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/), [Cost Explorer API pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/), and [SNS pricing](https://aws.amazon.com/sns/pricing/).
 
-- A live `GET /api/health` returned HTTP 200, but reported `environment=development`, `auth.enabled=false`, and `mode=development_bypass`. A live `GET /api/health/ready` returned the same health-shaped payload. That does not match this repository's readiness handler, which returns a separate `status=ready|not_ready` response after checking SQLite. The hosted backend therefore appeared to be serving an older build or configuration. The latest Render import log also reported `ModuleNotFoundError: No module named 'strands_decider'`; this repair removes that API startup dependency. Render's configured branch, commit, root directory, and build command cannot be verified without dashboard access.
-- An `OPTIONS /api/demo/scenarios` request with the deployed Vercel origin returned HTTP 400 and `Disallowed CORS origin`. This confirms the backend's effective CORS allowlist does not include that origin.
-- In a browser without a Vercel session, the supplied Vercel URL redirected to Vercel login. The application UI and its Network/Console failures could not be inspected without access to the deployment.
-- Later direct probes intermittently failed DNS resolution. Check results again after deployment; the intermittent failures do not establish that either service is down.
+## Live connectivity findings (2026-10-26)
+
+- The stable frontend URL `https://cloudcostsentinel.vercel.app` returned HTTP 200 and served the CloudCost Sentinel HTML publicly.
+- Render liveness, health, and readiness returned HTTP 200. Health reported `environment=demo`, `auth.mode=explicit_demo`, simulated Decider and Bedrock providers, and disabled AWS Cost Explorer. Readiness separately reported its database as connected.
+- Render accepted CORS preflight from the configured Vercel project URL `https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app`, but returned HTTP 400 for the stable production alias `https://cloudcostsentinel.vercel.app`. Add both exact origins to Render's `CORS_ORIGINS` as shown below, then redeploy/restart the service.
+- Render/Vercel dashboard settings, deployed commit SHAs, and provider logs are not accessible from this workspace. The live frontend currently serves HTML, but its deployment SHA and build-time API URL cannot be verified here.
 
 ## Vercel frontend settings
 
@@ -43,7 +45,7 @@ NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
 HOST=0.0.0.0
 DATABASE_PATH=/tmp/cloudcost-sentinel.db
-CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
+CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
 
 Do not configure `ALLOW_MOCK_IN_PRODUCTION`; it is not read by this application. Production startup already rejects mock providers.
@@ -60,7 +62,7 @@ Check the exact-origin preflight:
 
 ```sh
 curl -i -X OPTIONS https://cloudcostsentinel.onrender.com/api/demo/scenarios \
-  -H 'Origin: https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app' \
+  -H 'Origin: https://cloudcostsentinel.vercel.app' \
   -H 'Access-Control-Request-Method: GET' \
   -H 'Access-Control-Request-Headers: authorization,content-type'
 ```
@@ -69,13 +71,13 @@ It should return HTTP 200 and `Access-Control-Allow-Origin` matching the request
 
 ```sh
 curl -i -X OPTIONS https://cloudcostsentinel.onrender.com/api/analyze \
-  -H 'Origin: https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app' \
+  -H 'Origin: https://cloudcostsentinel.vercel.app' \
   -H 'Access-Control-Request-Method: POST' \
   -H 'Access-Control-Request-Headers: authorization,content-type'
 ```
 
 Then verify `GET /api/demo/scenarios`, `GET /api/approvals`, `GET /api/decisions?limit=15`, and a synthetic `POST /api/analyze` with `{"scenario_id":"compute_spike","use_aws_cost_explorer":false}` from the Vercel page. A request from an unlisted origin must not receive `Access-Control-Allow-Origin`. Confirm browser analysis and approvals render and that re-submitting a reviewed approval returns HTTP 409. These checks are still required after correcting service configuration; a direct health 200 alone does not verify the browser path.
 
-## CI status
+## Verification status
 
-GitHub Actions run [#5 for commit `52c65e5`](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40003922854) had a successful frontend job and successful backend dependency installation and Python compilation. `Run Backend Tests` failed; pattern tests and the standalone demo were skipped. The public check annotation only contains `Process completed with exit code 1`. Downloading job logs requires repository admin rights, and the GitHub CLI was unavailable in the inspection environment, so the failing assertion/traceback could not be confirmed here. Do not treat a speculative local dependency error as the CI root cause; obtain the full job log before changing backend tests or dependencies.
+The latest available GitHub Actions run before the current repair, [run 40020470191](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40020470191), passed frontend lint/build/tests and failed backend tests. The job log download endpoint requires repository admin rights. Reproducing the suite in a clean Python 3.11 environment identified two test defects: the Render configuration fixture omitted required `HOST=0.0.0.0`, and the partial Cost Explorer test referenced `cost_explorer` without importing it. Both are corrected in the repair branch. Re-run CI after pushing and use this document's live CORS check after updating Render's allowlist.

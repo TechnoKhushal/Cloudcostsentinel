@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from backend.config import Settings, parse_cors_origins, settings
 from backend.database.db import DatabaseRepository, ApprovalConflictError
-from backend.main import app, db, lifespan
+from backend.main import app, cost_explorer, db, lifespan
 from backend.models.approval import ApprovalItem
 from backend.models.cost import CostAnomaly, SpendMetrics
 from backend.services.cost_analyzer import calculate_spend_metrics, CostScenarioRegistry
@@ -646,6 +646,7 @@ def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypat
         Settings(ENVIRONMENT="development").validate_startup()
 
     demo = Settings(
+        HOST="0.0.0.0",
         ENVIRONMENT="demo",
         AUTH_ENABLED=False,
         CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
@@ -872,20 +873,30 @@ async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
 
 @pytest.mark.asyncio
 async def test_cors_preflight_allows_deployed_vercel_origin():
-    origin = "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"
+    origins = [
+        "https://cloudcostsentinel.vercel.app",
+        "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app",
+    ]
     prior_origins = list(settings.CORS_ORIGINS)
-    settings.CORS_ORIGINS[:] = list(dict.fromkeys([*prior_origins, origin]))
+    settings.CORS_ORIGINS[:] = list(dict.fromkeys([*prior_origins, *origins]))
     app.middleware_stack = None
     try:
+        for origin in origins:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                allowed = await ac.options(
+                    "/api/demo/scenarios",
+                    headers={
+                        "Origin": origin,
+                        "Access-Control-Request-Method": "GET",
+                        "Access-Control-Request-Headers": "authorization,content-type",
+                    },
+                )
+            assert allowed.status_code == 200
+            assert allowed.headers.get("access-control-allow-origin") == origin
+            assert "GET" in allowed.headers.get("access-control-allow-methods", "")
+            assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
+            assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            allowed = await ac.options(
-                "/api/demo/scenarios",
-                headers={
-                    "Origin": origin,
-                    "Access-Control-Request-Method": "GET",
-                    "Access-Control-Request-Headers": "authorization,content-type",
-                },
-            )
             rejected = await ac.options(
                 "/api/demo/scenarios",
                 headers={
@@ -894,11 +905,6 @@ async def test_cors_preflight_allows_deployed_vercel_origin():
                     "Access-Control-Request-Headers": "authorization,content-type",
                 },
             )
-        assert allowed.status_code == 200
-        assert allowed.headers.get("access-control-allow-origin") == origin
-        assert "GET" in allowed.headers.get("access-control-allow-methods", "")
-        assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
-        assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()
         assert "access-control-allow-origin" not in rejected.headers
     finally:
         settings.CORS_ORIGINS[:] = prior_origins

@@ -22,7 +22,7 @@ NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
 HOST=0.0.0.0
 DATABASE_PATH=/tmp/cloudcost-sentinel.db
-CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
+CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
 
 Do not add `ALLOW_MOCK_IN_PRODUCTION`; the application does not read that legacy variable. Production startup already rejects mock providers.
