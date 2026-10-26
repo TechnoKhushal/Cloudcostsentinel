@@ -33,6 +33,10 @@ Audit/change date: 2026-10-26. All commands below were run locally; they do not 
 | Browser E2E and responsive visual QA | Not run in this pass. |
 | Vercel/Render redeploy | Not triggered; no dashboard deployment controls available. |
 
+## Post-push live recheck
+
+Commit `26a792e397755e99c6aec901acdc7ef2f4df1285` was pushed to `origin/main`. About one minute later, Render `/api/health` and `/api/health/ready` still returned HTTP 200 with the old `providers.bedrock` response shape. Vercel root returned HTTP 200 and the expected title, but that alone does not establish which frontend revision is serving. The code push succeeded; deployment of the new source was not observed during this check. No Vercel or Render dashboard/log access was available to inspect deployment status.
+
 ## Limits
 
 OpenRouter uses one retry for 429/5xx-class responses, a 20-second request timeout, a 900-token output budget, and schema validation. The code does not yet persist AI usage events, enforce per-tenant quotas, or provide a circuit breaker. The offline report is labeled deterministic fallback. No real paid model invocation was made.
