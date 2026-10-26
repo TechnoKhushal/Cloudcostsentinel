@@ -1,12 +1,12 @@
 import React from "react";
 import { Sparkles, FileText, CheckSquare, Search, AlertCircle, Shield } from "lucide-react";
-import type { BedrockReport } from "../types";
+import type { InvestigationReport } from "../types";
 
-interface BedrockReportPanelProps {
-  report: BedrockReport | null;
+interface InvestigationReportPanelProps {
+  report: InvestigationReport | null;
 }
 
-export const BedrockReportPanel: React.FC<BedrockReportPanelProps> = ({ report }) => {
+export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> = ({ report }) => {
   if (!report) return null;
 
   return (
@@ -14,7 +14,7 @@ export const BedrockReportPanel: React.FC<BedrockReportPanelProps> = ({ report }
       <div className="panel-header">
         <h2 className="panel-title">
           <Sparkles size={18} color="#a855f7" />
-          <span>{report.is_simulated ? "Simulated Cost Investigation" : "Amazon Bedrock — Grounded Cost Investigation"}</span>
+          <span>{report.is_simulated ? "Grounded Cost Investigation · Offline" : "AI-assisted Cost Investigation"}</span>
         </h2>
         <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem" }}>
           <span className="status-pill pill-purple">

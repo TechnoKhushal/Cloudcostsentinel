@@ -83,7 +83,7 @@ test("each dashboard API helper uses the current FastAPI route and intended meth
     const url = new URL(String(input));
     calls.push({ path: `${url.pathname}${url.search}`, method: init?.method ?? "GET", headers: new Headers(init?.headers), body: init?.body });
     let payload: unknown = [];
-    if (url.pathname === "/api/health") payload = { environment: "demo", providers: { decider: {}, bedrock: {}, cost_explorer: {} } };
+    if (url.pathname === "/api/health") payload = { environment: "demo", providers: { decider: {}, narrator: {}, cost_explorer: {} } };
     if (url.pathname === "/api/analyze") payload = { anomaly: { metrics: {}, time_series: [] }, decision: {}, report: { observed_facts: [], safe_recommendations: [] }, is_simulated: true, cost_data_source: "synthetic_scenario", partial_data: false, data_warnings: [] };
     if (url.pathname === "/api/approvals/appr-1/decision") payload = approval;
     return new Response(JSON.stringify(payload), { status: 200 });

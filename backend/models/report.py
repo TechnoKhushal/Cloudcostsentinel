@@ -4,7 +4,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 
-class BedrockReport(BaseModel):
+class InvestigationReport(BaseModel):
     report_id: str
     anomaly_id: str
     decision_id: str
@@ -20,3 +20,8 @@ class BedrockReport(BaseModel):
     model_id: str
     is_simulated: bool = False
     generated_at: str
+
+
+# Compatibility alias for persisted SQLite JSON and clients compiled against
+# the previous provider-specific name. New code should use InvestigationReport.
+BedrockReport = InvestigationReport

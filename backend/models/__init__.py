@@ -1,7 +1,7 @@
 from .cost import CostAnomaly, CostDataPoint, SpendMetrics
 from .decision import DeciderAction, DeciderNormalizedState, DeciderQuestionSpec, DeciderResponseTrace
 from .approval import ApprovalItem
-from .report import BedrockReport
+from .report import BedrockReport, InvestigationReport
 
 __all__ = [
     "CostAnomaly",
@@ -13,4 +13,5 @@ __all__ = [
     "DeciderResponseTrace",
     "ApprovalItem",
     "BedrockReport",
+    "InvestigationReport",
 ]

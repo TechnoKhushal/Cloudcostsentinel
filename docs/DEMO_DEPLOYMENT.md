@@ -16,7 +16,6 @@ Set these Render environment variables:
 ENVIRONMENT=demo
 AUTH_ENABLED=false
 DECIDER_PROVIDER=mock
-BEDROCK_PROVIDER=mock
 AWS_COST_EXPLORER_ENABLED=false
 NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
@@ -27,7 +26,7 @@ CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaal
 
 Do not add `ALLOW_MOCK_IN_PRODUCTION`; the application does not read that legacy variable. Production startup already rejects mock providers.
 
-The current Render demo has no verified persistent disk, so use `/tmp/cloudcost-sentinel.db`. This is writable demo storage, not durable: approvals and other records may disappear on restart/redeploy. The code also selects this path by default for Render demo mode when `DATABASE_PATH` is unset. An explicit path such as `/var/data/sentinel.db` is never silently replaced; attach and verify a writable persistent disk before configuring it. Do not configure `DATABASE_URL`: PostgreSQL is not implemented and startup rejects it. This demo uses synthetic scenario IDs only; the API rejects custom anomaly payloads and Cost Explorer requests.
+The current Render demo has no verified persistent disk, so use `/tmp/cloudcost-sentinel.db`. This is writable demo storage, not durable: approvals and other records may disappear on restart/redeploy. Do not configure `DATABASE_URL`: PostgreSQL is not implemented and startup rejects it. Supabase migration foundations are documented in `SUPABASE_SETUP.md`, but are not yet used by the API.
 
 ## Vercel frontend
 
@@ -53,4 +52,4 @@ The live probe should return 200. In `ENVIRONMENT=demo`, readiness should return
 
 ## Authenticated production
 
-Production remains separate from this demo. It requires `AUTH_ENABLED=true`, real OIDC issuer/audience/JWKS, real non-mock provider configuration, exact HTTPS CORS origins, and `DATABASE_PATH` on a mounted persistent disk. PostgreSQL and the browser OIDC login flow are not implemented yet, so this repository is not production ready.
+Production remains separate from this demo. Supabase Auth, tenant-scoped repository integration, RLS verification and a browser sign-in flow are not implemented yet, so this repository is not ready for private customer data.

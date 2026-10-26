@@ -1,4 +1,4 @@
-import type { BedrockReport, CostAnomaly, DeciderResponseTrace } from "./types";
+import type { InvestigationReport, CostAnomaly, DeciderResponseTrace } from "./types";
 
 function safeCsvCell(value: unknown): string {
   let text = value == null ? "" : String(value);
@@ -6,7 +6,7 @@ function safeCsvCell(value: unknown): string {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-export function buildAnalysisCsv(anomaly: CostAnomaly, decision: DeciderResponseTrace, report: BedrockReport): string {
+export function buildAnalysisCsv(anomaly: CostAnomaly, decision: DeciderResponseTrace, report: InvestigationReport): string {
   const rows: [string, string, unknown][] = [
     ["Analysis", "Scenario", anomaly.scenario_name],
     ["Analysis", "Scenario ID", anomaly.scenario_id],
@@ -41,7 +41,7 @@ export function buildAnalysisCsv(anomaly: CostAnomaly, decision: DeciderResponse
   ].join("\r\n");
 }
 
-export function buildExecutiveBrief(anomaly: CostAnomaly, decision: DeciderResponseTrace, report: BedrockReport): string {
+export function buildExecutiveBrief(anomaly: CostAnomaly, decision: DeciderResponseTrace, report: InvestigationReport): string {
   const dailyDelta = `${anomaly.metrics.delta_amount >= 0 ? "+" : ""}${anomaly.currency} ${anomaly.metrics.delta_amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}/day`;
   const confidence = `${(decision.confidence * 100).toFixed(1)}%`;
   return [

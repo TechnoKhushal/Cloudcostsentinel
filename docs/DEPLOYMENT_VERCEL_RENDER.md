@@ -2,12 +2,12 @@
 
 This repository's public demo is synthetic and shared. It uses mock Decider and report providers, SQLite, and application-only approval records. The current Render configuration uses ephemeral `/tmp` storage unless a writable persistent disk is verified and explicitly configured. It never applies changes to AWS. Do not configure AWS Cost Explorer or real notification providers for this demo.
 
-No additional third-party API was introduced by this repair. The default demo uses local simulated providers and requires no provider API key. Optional live AWS features are outside the free default: Bedrock inference is billed by model usage, AWS Cost Explorer charges $0.01 per API request, and SNS may charge for messages/delivery. Keep the demo provider settings below to avoid those API charges. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/), [Cost Explorer API pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/), and [SNS pricing](https://aws.amazon.com/sns/pricing/).
+The default demo uses local synthetic providers and requires no provider API key. Optional OpenRouter models have model-specific pricing and availability; the free-model catalog currently lists zero-priced models, but capacity/rate limits vary. AWS Cost Explorer and SNS may also incur charges. Keep these integrations disabled for a no-provider-cost demo. See [OpenRouter free models](https://openrouter.ai/collections/free-models), [Cost Explorer API pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/), and [SNS pricing](https://aws.amazon.com/sns/pricing/).
 
 ## Live connectivity findings (2026-10-26)
 
 - The stable frontend URL `https://cloudcostsentinel.vercel.app` returned HTTP 200 and served the CloudCost Sentinel HTML publicly.
-- Render liveness, health, and readiness returned HTTP 200. Health reported `environment=demo`, `auth.mode=explicit_demo`, simulated Decider and Bedrock providers, and disabled AWS Cost Explorer. Readiness separately reported its database as connected.
+- Render liveness, health, and readiness returned HTTP 200. At the time of that earlier check, health reported `environment=demo`, `auth.mode=explicit_demo`, simulated providers, and disabled AWS Cost Explorer. Readiness separately reported its SQLite database as connected. Current source health uses `providers.narrator` and reports offline/OpenRouter status.
 - Render returned HTTP 200 to POST preflight from both the stable production alias and the generated Vercel project URL, with the exact requesting origin in `Access-Control-Allow-Origin` and `authorization,content-type` allowed.
 - The live Vercel page rendered its dashboard data and the frontend bundle referenced the Render API origin. Vercel/Render dashboard settings, deployed commit SHAs, and provider logs are not accessible from this workspace, so the active deployment revisions cannot be confirmed here.
 - A synthetic `stable_baseline` POST returned a simulated `monitor` decision, a simulated report, and no approval item. The branch's Vercel preview reported Ready but returns the Vercel login page to signed-out visitors, so the preview UI could not be inspected publicly.
@@ -40,7 +40,6 @@ Set these non-secret runtime variables in Render:
 ENVIRONMENT=demo
 AUTH_ENABLED=false
 DECIDER_PROVIDER=mock
-BEDROCK_PROVIDER=mock
 AWS_COST_EXPLORER_ENABLED=false
 NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false

@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tags](https://img.shields.io/badge/Tags-%23strands--decider--2b%20%7C%20%23policy-purple)](#hackathon-classification)
 
-> **CloudCost Sentinel** reviews synthetic or cloud usage metrics and explains cost anomalies. The default providers are simulated; live Strands Decider and Amazon Bedrock use require explicit configuration and have not been verified in this environment.
+> **CloudCost Sentinel** reviews synthetic or cloud usage metrics and explains cost anomalies. The public demo uses synthetic data. Explanations are deterministic offline by default; optional generative reports use OpenRouter from the backend only. Supabase schema work is present, but the API still uses SQLite and is not ready for tenant production data.
 
 ---
 
@@ -40,7 +40,7 @@ CloudCost Sentinel solves this by decoupling the **operational decision** from t
    │         └────────────────────────────────┴─────────────┘
    │                                          │
    │                                          ▼
-   │                        [Strands Agents SDK + Bedrock] │
+   │                         [Optional OpenRouter API] │
    │                         (Grounded Investigation Report)│
    │                                          │
    │                                          ▼
@@ -69,7 +69,7 @@ The pattern is packaged with:
 ## 3. Key Features
 
 - **Decision Provider:** The default is a clearly labeled simulated policy evaluator. An HTTP Decider can be configured separately.
-- **Investigation Reports:** The default uses a simulated template narrator. Amazon Bedrock can be configured separately.
+- **Investigation Reports:** Deterministic grounded templates work offline. Optional OpenRouter generation is backend-only and model-selected by environment; it never changes the deterministic decision.
 - **Zero-Mutation AWS Safety Sandbox:** Read-only telemetry access. CloudCost Sentinel never executes unverified deletions, instance terminations, or resizing operations on live AWS accounts.
 - **Single-Transition Human Approvals:** Approvals in the Sentinel dashboard update internal review states in the SQLite audit log with 409 Conflict replay protection.
 - **Calibrated Low-Confidence Fallback:** When telemetry is sparse or ambiguous, Decider's confidence drops below threshold; the system automatically and visibly escalates to `request_approval`.
@@ -124,13 +124,14 @@ Open `http://localhost:5173` in your browser.
 | `STRANDS_DECIDER_URL` | `http://127.0.0.1:8080/v1/systemone` | HTTP endpoint serving Strands Decider SystemOne wire protocol (port 8080) |
 | `DECIDER_MODEL_ID` | `StrandsAgents/strands-decider-2B-hobson-v19` | Strands Decider model identifier |
 | `DECIDER_MIN_CONFIDENCE` | `0.65` | Confidence threshold below which the agent conservatively falls back to `request_approval` |
-| `BEDROCK_PROVIDER` | `mock` | `mock` (deterministic grounded narrative adapter) or `bedrock` (live Amazon Bedrock) |
-| `AWS_REGION` | `us-east-1` | AWS region for Bedrock and Cost Explorer |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-7-sonnet-20250219-v1:0` | Amazon Bedrock foundation model ID |
+| `OPENROUTER_API_KEY` | unset | Optional server-only key. Leave unset for offline deterministic reports. |
+| `OPENROUTER_MODEL` | unset | Required with the key; choose a currently available model. No model is assumed available by default. |
+| `OPENROUTER_HTTP_REFERER` | unset | Optional app URL attribution header. |
+| `AWS_REGION` | `us-east-1` | AWS region for Cost Explorer. |
 | `AWS_COST_EXPLORER_ENABLED`| `false` | Read-only live AWS Cost Explorer queries (disabled by default) |
 | `AUTH_ENABLED` | `false` | Local development only. Public production requires `true` and complete OIDC/JWKS configuration. Explicit `demo` mode is synthetic-only. |
 | `NOTIFICATION_PROVIDER` | `mock` | `disabled`, `mock`, or `sns` (AWS Simple Notification Service) |
-| `DATABASE_PATH` | `backend/data/sentinel.db` locally; `/tmp/cloudcost-sentinel.db` for Render demo when unset | SQLite path. Render demo temp storage is ephemeral; production persistence requires a verified writable mounted disk. |
+| `DATABASE_PATH` | `backend/data/sentinel.db` locally; `/tmp/cloudcost-sentinel.db` for Render demo when unset | Current SQLite path. Render demo temp storage is ephemeral. Supabase persistence is not wired into API yet. |
 | `DATABASE_URL` | unset | Unsupported; startup refuses it rather than silently ignoring it. |
 
 Detailed documentation:
@@ -155,17 +156,11 @@ Detailed documentation:
    ```
 3. Restart the API. Configuration does not prove provider connectivity; no live Decider endpoint or checkpoint was verified for this release.
 
-### Connecting Amazon Bedrock
-1. Configure your AWS credentials via `aws configure` or standard IAM instance profile:
-   ```bash
-   export AWS_REGION=us-east-1
-   ```
-2. Enable model access for `Anthropic Claude 3.7 Sonnet` in your AWS Bedrock Console.
-3. In `.env`, set:
-   ```env
-   BEDROCK_PROVIDER=bedrock
-   ```
-4. Restart the API. A real invocation requires valid IAM identity, model access, and successful provider calls; configuration alone does not mean connected.
+### Connecting OpenRouter (optional)
+Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` in the backend environment only. Choose a currently available model from [OpenRouter's model catalog](https://openrouter.ai/models); pricing and availability can change. The [free-model collection](https://openrouter.ai/collections/free-models) currently lists zero-priced models, but capacity and rate limits can vary. The app has no default model and never places the key in Vite/browser variables. If unset or unavailable, it shows a clearly labeled deterministic fallback.
+
+### Supabase status
+The initial migration is documented in [Supabase setup](docs/SUPABASE_SETUP.md). It has not been applied to a project, and the backend does not yet use it; the current SQLite demo is ephemeral on Render.
 
 ## 7. Hosted Demo / Production Status
 

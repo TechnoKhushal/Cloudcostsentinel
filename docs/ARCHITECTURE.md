@@ -2,7 +2,7 @@
 
 **Tags:** `#strands-decider-2b` `#policy`
 
-**Current runtime note:** The default environment uses simulated providers. The Decider and Bedrock boxes below describe optional integration points; `configured_unverified` is not evidence of a live connection. Hosted public demo uses `ENVIRONMENT=demo`, synthetic scenarios, and mock providers. Render demo mode defaults to SQLite under `/tmp` when no `DATABASE_PATH` is set; that data is ephemeral. Persistence requires an explicitly configured, verified writable disk mount.
+**Current runtime note:** The public demo uses synthetic data and a simulated decision provider. Explanations run through a deterministic offline fallback unless backend-only OpenRouter variables are configured. Render demo mode defaults to SQLite under `/tmp`; that data is ephemeral. Supabase schema is under development but the API is not wired to it.
 
 ---
 
@@ -37,17 +37,18 @@ flowchart TD
     end
 
     subgraph Generative Narrative Layer
-        Math --> BedrockNarrator["Strands Agents SDK + Amazon Bedrock"]
-        ActionRouting --> BedrockNarrator
-        BedrockNarrator --> GroundedReport["Grounded Investigation Report<br/>(Facts, Audit, Safe Steps)"]
+        Math --> OpenRouter["Optional OpenRouter"]
+        ActionRouting --> OpenRouter
+        OpenRouter --> GroundedReport["Grounded Investigation Report<br/>(Facts, Audit, Safe Steps)"]
     end
 
     subgraph Storage & Presentation
-        ObsLog --> SQLite[("SQLite Database Repository")]
+        ObsLog --> SQLite[("Current SQLite demo repository")]
         AlertQueue --> SQLite
         ApprQueue --> SQLite
         GroundedReport --> SQLite
         SQLite --> UI["Cloud Operations Command Center<br/>(React + Vite + Recharts)"]
+        Supabase["Supabase schema / RLS<br/>(not yet connected to API)"]
     end
 ```
 
@@ -61,9 +62,9 @@ flowchart TD
 | **Strands Decider 2B** | Evaluates normalized state against exact `ChoiceQuestion` (`monitor`, `notify_owner`, `request_approval`). Returns argmax choice and calibrated confidence. | Zero open-ended text generation; strictly evaluates typed options in a single forward pass. |
 | **Confidence Guard & Fallback** | Monitors calibrated model confidence against `DECIDER_MIN_CONFIDENCE` (default 0.65). If below threshold or if inference fails, forces `request_approval`. | High-assurance safety mechanism preventing autonomous under-reaction to ambiguous telemetry. |
 | **Strands Intervention Handler** | Implements `ThresholdAwareAnomalyIntervention(InterventionHandler)` from the Strands Agents SDK to gate agent tools prior to execution. | Maps `monitor` -> `Proceed`, `notify_owner` -> `Guide`, and `request_approval` -> `Confirm`. |
-| **Amazon Bedrock Narrator** | Synthesizes observed metric facts into an executive summary, evidence timeline, Decider action audit, and safe recommendations. | Strictly grounded on observed facts; never invents AWS resource IDs, prices, or untracked causes. Never overrides Decider's choice. |
+| **Optional OpenRouter Narrator** | Produces a structured explanation from bounded telemetry. | Backend-only key, explicit model selection, bounded output, strict validation, one transient retry. Deterministic offline fallback is labeled and never overrides the Decider. |
 | **Human Review Queue** | Stores pending remediation recommendations for manual engineer sign-off. | Non-mutative sandbox; human approval updates internal audit state without triggering live resource deletions. |
-| **Command Center UI** | Dark cloud operations dashboard displaying real-time spend curves, Decider choices, wire-level traces, Bedrock reports, and approval buttons. | Fast React 19 + TypeScript + Vite frontend with accessible contrast and instant scenario replay. |
+| **Command Center UI** | Dashboard displaying spend curves, Decider choices, wire-level traces, reports, and approval buttons. | React 19 + TypeScript + Vite. Account/workspace frontend and Supabase-backed persistence remain unimplemented. |
 
 ---
 

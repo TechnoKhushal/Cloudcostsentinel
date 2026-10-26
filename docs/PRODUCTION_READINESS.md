@@ -36,7 +36,6 @@ ENVIRONMENT=demo
 HOST=0.0.0.0
 AUTH_ENABLED=false
 DECIDER_PROVIDER=mock
-BEDROCK_PROVIDER=mock
 AWS_COST_EXPLORER_ENABLED=false
 NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
@@ -46,14 +45,14 @@ CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaal
 
 `PORT` and `RENDER` are supplied by Render; do not set them manually. Include only exact frontend origins that users actually access. Current stable-origin preflight was verified; dashboard configuration and the generated alias's current necessity were not independently inspected. Do not use wildcard CORS.
 
-No AWS, Bedrock, Strands Decider, email, or notification API key is needed for this configuration. The demo uses local simulated providers. `/tmp` is ephemeral, so approvals/history can disappear when Render restarts or redeploys. Persistent production records require an attached writable disk and a `DATABASE_PATH` under its verified mount; PostgreSQL/`DATABASE_URL` is not implemented.
+No AWS, OpenRouter, Strands Decider, email, or notification API key is needed for this configuration. The demo uses local simulated providers. `/tmp` is ephemeral, so approvals/history can disappear when Render restarts or redeploys. Supabase schema foundations exist but are not wired to the API.
 
 ## Live checks performed
 
 | Check | Result |
 | --- | --- |
 | `GET https://cloudcostsentinel.onrender.com/api/health/live` | HTTP 200, `{"status":"ok"}` |
-| `GET https://cloudcostsentinel.onrender.com/api/health/ready` | HTTP 200; `ready`, environment `demo`, database `connected`, Decider and Bedrock `simulated` |
+| `GET https://cloudcostsentinel.onrender.com/api/health/ready` | Historical response: HTTP 200; `ready`, environment `demo`, database `connected`, simulated providers. Current code reports narrative state as `offline` when OpenRouter is unset. |
 | `GET https://cloudcostsentinel.onrender.com/api/demo/scenarios` | HTTP 200, synthetic scenario list |
 | `OPTIONS /api/demo/scenarios` from `https://cloudcostsentinel.vercel.app` | HTTP 200; `Access-Control-Allow-Origin` exactly matched the requested origin; `authorization,content-type` allowed |
 | `GET https://cloudcostsentinel.vercel.app/` | HTTP 200, public dashboard title |

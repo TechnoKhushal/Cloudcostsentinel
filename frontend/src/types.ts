@@ -59,7 +59,7 @@ export interface DeciderResponseTrace {
   executed_details: Record<string, any>;
 }
 
-export interface BedrockReport {
+export interface InvestigationReport {
   report_id: string;
   anomaly_id: string;
   decision_id: string;
@@ -76,6 +76,8 @@ export interface BedrockReport {
   is_simulated: boolean;
   generated_at: string;
 }
+/** @deprecated Compatibility alias; reports are provider-neutral. */
+export type BedrockReport = InvestigationReport;
 
 export interface ApprovalItem {
   id: string;
@@ -121,11 +123,10 @@ export interface HealthInfo {
       endpoint: string;
       ready?: boolean;
     };
-    bedrock: {
+    narrator: {
       provider: string;
       state: string;
       model_id: string;
-      region: string;
       ready?: boolean;
     };
     cost_explorer: {

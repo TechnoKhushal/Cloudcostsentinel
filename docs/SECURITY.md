@@ -2,12 +2,12 @@
 
 ## 1. Overview & Threat Model
 
-CloudCost Sentinel is a cloud cost decision-support application. Its default decision and report providers are simulated. Live integrations require explicit configuration and separate verification.
+CloudCost Sentinel is a cloud cost decision-support application. Its default decision provider is simulated and reports use an offline deterministic template unless OpenRouter is configured. Supabase schema foundations exist, but the API is not tenant-scoped and should not receive private customer data.
 
 ### Trust Boundaries
-1. **Frontend to API Gateway / Reverse Proxy**: Web client to FastAPI backend. Protected by OIDC/OAuth2 Bearer tokens in production or local development mode.
+1. **Frontend to API Gateway / Reverse Proxy**: Web client to FastAPI backend. Generic OIDC bearer validation exists for production; browser sign-in and tenant ownership are not complete.
 2. **API Backend to Strands Decider**: In HTTP mode, calls `strands-decider serve` via typed REST SystemOne wire protocol.
-3. **API Backend to Amazon Bedrock**: Strictly read-only generative analysis via AWS Bedrock Converse API using IAM credentials.
+3. **API Backend to OpenRouter**: Optional bounded report generation with a backend-only key. Resource data is treated as untrusted evidence; no cloud credentials or mutation tools are provided to the model.
 4. **API Backend to AWS Cost Explorer**: Read-only (`ce:GetCostAndUsage`) telemetry collection.
 
 ---
@@ -40,9 +40,9 @@ CloudCost Sentinel is a cloud cost decision-support application. Its default dec
 
 ### Public Simulated Demo
 - `ENVIRONMENT=demo` is an explicit shared public demo, not a tenant-secure production mode.
-- It requires mock Decider and report providers, prohibits Cost Explorer and real notifications, accepts synthetic scenario IDs only, and marks the shared review queue as demo data.
+- It requires the mock Decider, prohibits Cost Explorer and real notifications, accepts synthetic scenario IDs only, and marks the shared review queue as demo data. Reports use a clearly labeled deterministic fallback unless OpenRouter is explicitly configured.
 - Per-process limits do not coordinate across multiple replicas. Use one instance or add shared rate limiting before scaling.
-- SQLite needs a persistent mounted disk for records to survive redeploys. `DATABASE_URL` is rejected because PostgreSQL is not implemented.
+- SQLite needs a persistent mounted disk for records to survive redeploys. `DATABASE_URL` is rejected because PostgreSQL is not implemented. Supabase migration SQL is not connected to the API.
 - The frontend does not yet implement OIDC sign-in. Do not deploy it as an authenticated dashboard until that flow exists.
 
 ---
@@ -86,22 +86,7 @@ When deploying with live AWS integrations, use IAM roles for Amazon EC2 or ECS T
 }
 ```
 
-### Amazon Bedrock Least-Privilege Policy
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "BedrockInvokeModelReadOnly",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel"
-      ],
-      "Resource": "arn:aws:bedrock:us-east-1::foundation-model/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-    }
-  ]
-}
-```
+Generative explanations use OpenRouter's API from the backend only. Leave `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` unset to avoid external generative calls. Select an available model and review its current pricing/data terms before enabling it.
 
 ---
 

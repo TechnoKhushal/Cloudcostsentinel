@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from ..models.cost import CostAnomaly
 from ..models.decision import DeciderResponseTrace
 from ..models.approval import ApprovalItem
-from ..models.report import BedrockReport
+from ..models.report import InvestigationReport
 
 class ApprovalConflictError(Exception):
     """Raised when an approval that is already reviewed attempts another transition."""
@@ -180,7 +180,7 @@ class DatabaseRepository:
                 ),
             )
 
-    def save_report(self, report: BedrockReport) -> None:
+    def save_report(self, report: InvestigationReport) -> None:
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -286,7 +286,7 @@ class DatabaseRepository:
                 is_simulated=bool(row["is_simulated"]) if "is_simulated" in row.keys() and row["is_simulated"] is not None else True,
             )
 
-    def get_latest_report_for_anomaly(self, anomaly_id: str) -> Optional[BedrockReport]:
+    def get_latest_report_for_anomaly(self, anomaly_id: str) -> Optional[InvestigationReport]:
         with self._get_connection() as conn:
             cursor = conn.execute(
                 "SELECT report_json FROM reports WHERE anomaly_id = ? ORDER BY generated_at DESC LIMIT 1",
@@ -294,5 +294,5 @@ class DatabaseRepository:
             )
             row = cursor.fetchone()
             if row:
-                return BedrockReport.model_validate_json(row["report_json"])
+                return InvestigationReport.model_validate_json(row["report_json"])
             return None

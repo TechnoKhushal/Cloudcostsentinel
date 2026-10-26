@@ -1,4 +1,4 @@
-import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, BedrockReport, HealthInfo, Scenario } from "./types";
+import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, InvestigationReport, HealthInfo, Scenario } from "./types";
 
 export class ApiError extends Error {
   readonly status?: number;
@@ -125,7 +125,7 @@ const isDecision = (item: unknown): item is DeciderResponseTrace => isObject(ite
 export async function fetchHealth(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<HealthInfo> {
   const value: unknown = await requestJson("/api/health", { signal }, "Health check", environment);
   if (!isObject(value) || typeof value.environment !== "string" || !isObject(value.providers)
-    || !isObject(value.providers.decider) || !isObject(value.providers.bedrock) || !isObject(value.providers.cost_explorer)) {
+    || !isObject(value.providers.decider) || !isObject(value.providers.narrator) || !isObject(value.providers.cost_explorer)) {
     throw new ApiError("The health endpoint returned an unexpected response shape.", { endpoint: "/api/health" });
   }
   return value as unknown as HealthInfo;
@@ -139,7 +139,7 @@ export async function fetchScenarios(signal?: AbortSignal, environment: BuildEnv
 export interface AnalysisResult {
   anomaly: CostAnomaly;
   decision: DeciderResponseTrace;
-  report: BedrockReport;
+  report: InvestigationReport;
   approval: ApprovalItem | null;
   is_simulated: boolean;
   cost_data_source: string;

@@ -5,9 +5,9 @@ import { ScenarioControls } from "./components/ScenarioControls";
 import { OverviewCards } from "./components/OverviewCards";
 import { SpendChart } from "./components/SpendChart";
 import { DecisionPanel } from "./components/DecisionPanel";
-import { BedrockReportPanel } from "./components/BedrockReportPanel";
+import { InvestigationReportPanel } from "./components/InvestigationReportPanel";
 import { ApprovalsFeed } from "./components/ApprovalsFeed";
-import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, BedrockReport, HealthInfo, Scenario } from "./types";
+import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, InvestigationReport, HealthInfo, Scenario } from "./types";
 import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, submitApprovalDecision } from "./api";
 import { buildAnalysisCsv, buildExecutiveBrief, downloadAnalysisCsv } from "./analysisExport";
 
@@ -21,7 +21,7 @@ export const App = () => {
   const [anomaly, setAnomaly] = useState<CostAnomaly | null>(null);
   const [decision, setDecision] = useState<DeciderResponseTrace | null>(null);
   const [decisionHistory, setDecisionHistory] = useState<DeciderResponseTrace[]>([]);
-  const [report, setReport] = useState<BedrockReport | null>(null);
+  const [report, setReport] = useState<InvestigationReport | null>(null);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const [resourceErrors, setResourceErrors] = useState<ResourceErrors>({ health: null, scenarios: null, decisions: null, approvals: null });
   const [analysisError, setAnalysisError] = useState<ApiError | Error | null>(null);
@@ -256,7 +256,7 @@ export const App = () => {
       <div className="dashboard-grid">
         <div className="dashboard-column">
           {anomaly ? <SpendChart data={anomaly.time_series} baseline={anomaly.metrics.baseline_spend} service={anomaly.service} /> : <section className="panel-card empty-panel"><h2>Spend telemetry</h2><p>Chart data will appear after a scenario analysis completes.</p></section>}
-          {report ? <BedrockReportPanel report={report} /> : <section className="panel-card empty-panel"><h2>Investigation report</h2><p>Grounded recommendations will appear after analysis. Provider mode is reported by the API above.</p></section>}
+          {report ? <InvestigationReportPanel report={report} /> : <section className="panel-card empty-panel"><h2>Investigation report</h2><p>Grounded recommendations will appear after analysis. Provider mode is reported by the API above.</p></section>}
         </div>
         <div className="dashboard-column">
           {decision ? <DecisionPanel decision={decision} /> : <section className="panel-card empty-panel"><h2>Decision recommendation</h2><p>The policy recommendation will appear after analysis.</p></section>}

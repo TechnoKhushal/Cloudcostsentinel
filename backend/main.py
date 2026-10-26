@@ -22,12 +22,12 @@ from .database.db import ApprovalConflictError, DatabaseRepository
 from .models.approval import ApprovalItem
 from .models.cost import CostAnomaly
 from .models.decision import DeciderResponseTrace
-from .models.report import BedrockReport
+from .models.report import InvestigationReport
 from .services.aws_cost_explorer import AWSCostExplorerService
 from .services.cost_analyzer import CostScenarioRegistry
 from .services.confidence import mock_confidence
 from .services.decider_client import DeciderClient
-from .services.strands_agent import StrandsBedrockNarrator
+from .services.narrator import OpenRouterNarrator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,18 +58,18 @@ async def lifespan(app: FastAPI):
             db_file,
         )
     logger.info(
-        "CloudCost Sentinel starting in environment='%s', auth_enabled=%s, decider_provider='%s', bedrock_provider='%s'",
+        "CloudCost Sentinel starting in environment='%s', auth_enabled=%s, decider_provider='%s', narrator_provider='%s'",
         settings.ENVIRONMENT,
         settings.AUTH_ENABLED,
         settings.DECIDER_PROVIDER,
-        settings.BEDROCK_PROVIDER,
+        "openrouter" if settings.OPENROUTER_API_KEY else "offline",
     )
     yield
 
 
 app = FastAPI(
     title="CloudCost Sentinel API",
-    description="Intelligent Cloud Spend Decision Agent using Strands Decider 2B and Amazon Bedrock",
+    description="Read-only Cloud Cost Decision Support using deterministic analysis and optional OpenRouter explanations",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -93,7 +93,7 @@ app.add_middleware(
 # initialization occurs in lifespan after environment validation.
 db = DatabaseRepository(settings.DATABASE_PATH)
 decider_client = DeciderClient()
-bedrock_narrator = StrandsBedrockNarrator()
+narrator = OpenRouterNarrator()
 cost_explorer = AWSCostExplorerService()
 
 
@@ -177,15 +177,11 @@ async def get_health() -> Dict[str, Any]:
         decider_state = "disabled"
         reported_model = "none"
 
-    # Determine truthful Bedrock status
-    if settings.BEDROCK_PROVIDER == "mock":
-        bedrock_state = "simulated"
-        bedrock_model = "grounded-template-narrator-v1"
-    else:
-        bedrock_state = "configured_unverified"
-        bedrock_model = settings.BEDROCK_MODEL_ID
+    # AI is optional: no key means deterministic offline explanations.
+    narrator_state = "configured_unverified" if settings.OPENROUTER_API_KEY else "offline"
+    narrator_model = settings.OPENROUTER_MODEL or "none"
 
-    provider_unverified = decider_state == "configured_unverified" or bedrock_state == "configured_unverified"
+    provider_unverified = decider_state == "configured_unverified" or narrator_state == "configured_unverified"
     return {
         "status": "simulated" if settings.ENVIRONMENT == "demo" else ("degraded" if provider_unverified else "healthy"),
         "service": "CloudCost Sentinel",
@@ -209,11 +205,10 @@ async def get_health() -> Dict[str, Any]:
                 "model_id": reported_model,
                 "min_confidence_threshold": settings.DECIDER_MIN_CONFIDENCE,
             },
-            "bedrock": {
-                "provider": settings.BEDROCK_PROVIDER,
-                "state": bedrock_state,
-                "model_id": bedrock_model,
-                "region": settings.AWS_REGION,
+            "narrator": {
+                "provider": "openrouter" if settings.OPENROUTER_API_KEY else "offline",
+                "state": narrator_state,
+                "model_id": narrator_model,
             },
             "cost_explorer": ce_status,
             "notifications": {
@@ -232,9 +227,9 @@ async def get_health_ready(response: Response) -> Dict[str, Any]:
     """Readiness reflects local storage and required production provider state."""
     database_ready = db.check_ready()
     decider_state = "simulated" if settings.DECIDER_PROVIDER == "mock" else "configured_unverified"
-    bedrock_state = "simulated" if settings.BEDROCK_PROVIDER == "mock" else "configured_unverified"
+    narrator_state = "configured_unverified" if settings.OPENROUTER_API_KEY else "offline"
     providers_ready = settings.ENVIRONMENT == "demo" or (
-        decider_state == "connected" and bedrock_state == "connected"
+        decider_state == "connected"
     )
     ready = database_ready and providers_ready
     if not ready:
@@ -245,7 +240,7 @@ async def get_health_ready(response: Response) -> Dict[str, Any]:
         "checks": {
             "database": "connected" if database_ready else "unavailable",
             "decider": decider_state,
-            "bedrock": bedrock_state,
+            "narrator": narrator_state,
         },
     }
 
@@ -269,7 +264,7 @@ async def analyze_anomaly(
     req: AnalyzeRequest,
     principal: AuthenticatedPrincipal = Depends(require_viewer),
 ) -> Dict[str, Any]:
-    """Analyze cloud spend anomaly, invoke Strands Decider 2B, and generate Bedrock report."""
+    """Analyze cloud spend anomaly, invoke Strands Decider 2B, and generate investigation report."""
     logger.info(
         "Executing analysis requested by %s for scenario_id: %s (AWS live: %s)",
         principal.email,
@@ -335,8 +330,8 @@ async def analyze_anomaly(
         )
         db.save_approval(approval_item)
 
-    # 4. Generate grounded report with Amazon Bedrock via Strands Agents
-    report: BedrockReport = await bedrock_narrator.generate_report(anomaly, trace)
+    # 4. Generate a grounded report with OpenRouter or the deterministic offline fallback
+    report: InvestigationReport = await narrator.generate_report(anomaly, trace)
     db.save_report(report)
 
     return {

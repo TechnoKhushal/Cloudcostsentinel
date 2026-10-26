@@ -86,12 +86,13 @@ class Settings(BaseModel):
         default_factory=lambda: float(os.getenv("DECIDER_MIN_CONFIDENCE", "0.65"))
     )
 
-    # Amazon Bedrock Settings
-    BEDROCK_PROVIDER: str = Field(default_factory=lambda: os.getenv("BEDROCK_PROVIDER", "mock"))
+    # Generative explanations use OpenRouter only. No model is assumed to exist;
+    # deployments select an available model explicitly in their own environment.
+    OPENROUTER_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
+    OPENROUTER_MODEL: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL"))
+    OPENROUTER_HTTP_REFERER: Optional[str] = Field(default_factory=lambda: os.getenv("OPENROUTER_HTTP_REFERER"))
+    OPENROUTER_APP_TITLE: str = Field(default_factory=lambda: os.getenv("OPENROUTER_APP_TITLE", "CloudCost Sentinel"))
     AWS_REGION: str = Field(default_factory=lambda: os.getenv("AWS_REGION", "us-east-1"))
-    BEDROCK_MODEL_ID: str = Field(
-        default_factory=lambda: os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
-    )
     AWS_ACCESS_KEY_ID: str | None = Field(default_factory=lambda: os.getenv("AWS_ACCESS_KEY_ID"))
     AWS_SECRET_ACCESS_KEY: str | None = Field(default_factory=lambda: os.getenv("AWS_SECRET_ACCESS_KEY"))
     AWS_SESSION_TOKEN: str | None = Field(default_factory=lambda: os.getenv("AWS_SESSION_TOKEN"))
@@ -143,9 +144,8 @@ class Settings(BaseModel):
         if self.DECIDER_PROVIDER not in allowed_deciders:
             raise ValueError(f"Invalid DECIDER_PROVIDER '{self.DECIDER_PROVIDER}'. Allowed: {sorted(allowed_deciders)}")
 
-        allowed_bedrock = {"mock", "bedrock"}
-        if self.BEDROCK_PROVIDER not in allowed_bedrock:
-            raise ValueError(f"Invalid BEDROCK_PROVIDER '{self.BEDROCK_PROVIDER}'. Allowed: {allowed_bedrock}")
+        if bool(self.OPENROUTER_API_KEY) != bool(self.OPENROUTER_MODEL):
+            raise ValueError("Set both OPENROUTER_API_KEY and OPENROUTER_MODEL to enable AI reports, or leave both unset.")
 
         if self.DATABASE_URL:
             raise ValueError(
@@ -186,9 +186,9 @@ class Settings(BaseModel):
                 if issuer.scheme != "https" or not issuer.netloc or jwks.scheme != "https" or not jwks.netloc:
                     raise ValueError("Production OIDC issuer and JWKS URL must be valid HTTPS URLs.")
 
-            if self.DECIDER_PROVIDER == "mock" or self.BEDROCK_PROVIDER == "mock":
+            if self.DECIDER_PROVIDER == "mock":
                 raise ValueError(
-                    "Production startup refused: mock providers are prohibited; use ENVIRONMENT=demo for simulated providers."
+                    "Production startup refused: mock decision providers are prohibited; use ENVIRONMENT=demo for simulated providers."
                 )
 
             database_path = Path(self.DATABASE_PATH).expanduser()
@@ -207,8 +207,8 @@ class Settings(BaseModel):
             self._validate_public_origins()
             if self.AUTH_ENABLED:
                 raise ValueError("ENVIRONMENT=demo is unauthenticated by design; set AUTH_ENABLED=false.")
-            if self.DECIDER_PROVIDER != "mock" or self.BEDROCK_PROVIDER != "mock":
-                raise ValueError("ENVIRONMENT=demo requires DECIDER_PROVIDER=mock and BEDROCK_PROVIDER=mock.")
+            if self.DECIDER_PROVIDER != "mock":
+                raise ValueError("ENVIRONMENT=demo requires DECIDER_PROVIDER=mock.")
             if self.AWS_COST_EXPLORER_ENABLED:
                 raise ValueError("ENVIRONMENT=demo prohibits live AWS Cost Explorer access.")
             if self.NOTIFICATION_PROVIDER not in {"disabled", "mock"}:

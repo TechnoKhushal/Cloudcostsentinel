@@ -219,7 +219,7 @@ async def test_api_health_endpoint():
         assert data["status"] == "healthy"
         assert "decider" in data["providers"]
         assert "state" in data["providers"]["decider"]
-        assert "bedrock" in data["providers"]
+        assert "narrator" in data["providers"]
         assert "auth" in data
 
 
@@ -240,7 +240,7 @@ from backend.config import Settings
 Settings(
     ENVIRONMENT="demo", AUTH_ENABLED=False,
     CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
-    DECIDER_PROVIDER="mock", BEDROCK_PROVIDER="mock",
+    DECIDER_PROVIDER="mock",
     AWS_COST_EXPLORER_ENABLED=False, NOTIFICATION_PROVIDER="disabled",
 ).validate_startup()
 Settings(
@@ -493,7 +493,6 @@ def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephe
     monkeypatch.setenv("AUTH_ENABLED", "false")
     monkeypatch.setenv("CORS_ORIGINS", "https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app")
     monkeypatch.setenv("DECIDER_PROVIDER", "mock")
-    monkeypatch.setenv("BEDROCK_PROVIDER", "mock")
     monkeypatch.setenv("AWS_COST_EXPLORER_ENABLED", "false")
     monkeypatch.setenv("NOTIFICATION_PROVIDER", "disabled")
     monkeypatch.delenv("DATABASE_PATH", raising=False)
@@ -521,7 +520,6 @@ def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephe
             AUTH_AUDIENCE="sentinel-api",
             DECIDER_PROVIDER="http",
             STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
-            BEDROCK_PROVIDER="bedrock",
             DATABASE_PATH=str(Path(tempfile.gettempdir()) / "sentinel-prod.db"),
         ).validate_startup()
 
@@ -601,7 +599,6 @@ def test_startup_validation_rules():
             AUTH_ISSUER="https://example.com",
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="http",
-            BEDROCK_PROVIDER="bedrock",
         ).validate_startup()
 
 
@@ -611,7 +608,6 @@ def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
         AUTH_ENABLED=False,
         CORS_ORIGINS=["https://sentinel.example"],
         DECIDER_PROVIDER="mock",
-        BEDROCK_PROVIDER="mock",
         AWS_COST_EXPLORER_ENABLED=False,
         NOTIFICATION_PROVIDER="disabled",
     )
@@ -651,7 +647,6 @@ def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypat
         AUTH_ENABLED=False,
         CORS_ORIGINS=["https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app"],
         DECIDER_PROVIDER="mock",
-        BEDROCK_PROVIDER="mock",
         AWS_COST_EXPLORER_ENABLED=False,
         NOTIFICATION_PROVIDER="disabled",
         DATABASE_PATH="/var/data/sentinel.db",
@@ -669,7 +664,6 @@ def test_production_rejects_sqlite_database_url():
             AUTH_ISSUER="https://issuer.example",
             AUTH_AUDIENCE="sentinel-api",
             DECIDER_PROVIDER="http",
-            BEDROCK_PROVIDER="bedrock",
             DATABASE_URL="postgresql://user:pass@db.example/sentinel",
         ).validate_startup()
 
@@ -693,7 +687,6 @@ def test_production_auth_fixture_and_decider_startup_validation():
             AUTH_ISSUER=None,
             AUTH_AUDIENCE=None,
             DECIDER_PROVIDER="mock",
-            BEDROCK_PROVIDER="mock",
         ).validate_startup()
 
     # Production refuses ENABLE_TEST_FIXTURE_ENDPOINT=true
@@ -706,7 +699,6 @@ def test_production_auth_fixture_and_decider_startup_validation():
             AUTH_ISSUER="https://example.com",
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="mock",
-            BEDROCK_PROVIDER="mock",
             ENABLE_TEST_FIXTURE_ENDPOINT=True,
         ).validate_startup()
 
@@ -785,7 +777,6 @@ def test_auth_requires_oidc_when_enabled():
             AUTH_ISSUER=None,
             AUTH_AUDIENCE=None,
             DECIDER_PROVIDER="mock",
-            BEDROCK_PROVIDER="mock",
         ).validate_startup()
 
 
@@ -806,7 +797,6 @@ def test_fixture_endpoint_rejected_in_production():
             AUTH_ISSUER="https://example.com",
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="mock",
-            BEDROCK_PROVIDER="mock",
             ENABLE_TEST_FIXTURE_ENDPOINT=True,
         ).validate_startup()
 
@@ -933,7 +923,6 @@ async def test_readiness_reflects_database_and_demo_provider_state():
 
     with unittest.mock.patch.object(settings, "ENVIRONMENT", "demo"), \
          unittest.mock.patch.object(settings, "DECIDER_PROVIDER", "mock"), \
-         unittest.mock.patch.object(settings, "BEDROCK_PROVIDER", "mock"), \
          unittest.mock.patch.object(db, "check_ready", return_value=True):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

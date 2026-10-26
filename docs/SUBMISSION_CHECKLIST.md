@@ -9,7 +9,7 @@
 | **Genuinely Working Agent** | ⏳ Runtime verification pending | FastAPI backend (`backend/`), React Vite UI (`frontend/`), SQLite repository are present; current live deployment could not be reached |
 | **Strands Decider 2B in Main Path** | ⏳ Live inference unverified | Default provider is a simulated policy evaluator; optional HTTP integration is in source |
 | **Strands Agents Intervention Integration** | ⏳ Runtime verification pending | `ThresholdAwareAnomalyIntervention` (`backend/interventions/anomaly_policy.py`) |
-| **Amazon Bedrock Generative Narrative** | ⏳ Live invocation unverified | Default narrative provider is simulated; optional Bedrock integration is in source |
+| **OpenRouter Generative Narrative** | ⏳ Live invocation unverified | Optional backend-only integration is implemented; offline fallback is the default; no provider request has been made |
 | **Low-Confidence Safety Fallback** | ⏳ Test rerun pending | Conservative fallback is implemented in source |
 | **Zero Mutation AWS Safety** | ⏳ Runtime verification pending | Source provides read-only guidance and internal approval records |
 | **Deterministic Synthetic Scenarios** | ⏳ Test rerun pending | Scenario fixtures are present in source |

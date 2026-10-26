@@ -25,7 +25,7 @@ npm run dev
 ```
 Open [http://localhost:5173](http://localhost:5173). The dashboard runs with:
 - **Decider 2B**: Deterministic mock policy evaluator (`demo-policy-evaluator-v1`)
-- **Bedrock**: Deterministic grounded template narrator (`grounded-template-narrator-v1`)
+- **Narrative**: Deterministic grounded offline report (`deterministic-v1`) unless OpenRouter is configured.
 - **Cost Data**: 5 deterministic scenarios (`compute_spike`, `database_drift`, etc.)
 
 ---
@@ -47,18 +47,8 @@ To connect CloudCost Sentinel to the genuine Strands Decider 2B model:
 
 ---
 
-### Mode C: Live Amazon Bedrock (Cloud Narrative Reports)
-1. Ensure AWS credentials are configured via standard AWS CLI:
-   ```bash
-   aws configure
-   ```
-2. Enable model access in AWS Bedrock console for `us.anthropic.claude-3-7-sonnet-20250219-v1:0` in `us-east-1`.
-3. In `.env`:
-   ```ini
-   BEDROCK_PROVIDER=bedrock
-   AWS_REGION=us-east-1
-   ```
-4. Restart CloudCost Sentinel. A successful real invocation depends on credentials and model access; this setup is not live-verified here.
+### Mode C: Optional OpenRouter report generation
+Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` in the backend environment only. Select a currently available model in the [OpenRouter catalog](https://openrouter.ai/models) and review its price/data terms first. No model is configured by default. If the API is absent or returns an error, the report is labeled as deterministic fallback. OpenRouter usage has not been live-tested here.
 
 ---
 
@@ -82,7 +72,7 @@ CloudCost Sentinel exposes two distinct probes:
     "checks": {
       "database": "connected",
       "decider": "simulated",
-      "bedrock": "simulated"
+      "narrator": "offline"
     }
   }
   ```
