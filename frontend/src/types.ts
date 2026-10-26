@@ -141,4 +141,5 @@ export interface HealthInfo {
     };
   };
   safety_guarantee: string;
+  persistence?: { provider: string; state: string };
 }

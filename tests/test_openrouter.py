@@ -21,7 +21,7 @@ def _completion():
 @pytest.mark.asyncio
 async def test_openrouter_report_uses_bounded_backend_request_and_validates_response(monkeypatch):
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "server-secret-test")
-    monkeypatch.setattr(settings, "OPENROUTER_MODEL", "verified/test-model")
+    monkeypatch.setattr(settings, "OPENROUTER_MODEL", "openrouter/free")
     monkeypatch.setattr(settings, "OPENROUTER_HTTP_REFERER", "https://sentinel.example")
     calls = []
 
@@ -34,6 +34,7 @@ async def test_openrouter_report_uses_bounded_backend_request_and_validates_resp
 
     monkeypatch.setattr("backend.services.narrator.httpx.AsyncClient", lambda **kwargs: Client())
     anomaly = CostScenarioRegistry.generate_scenario_anomaly("compute_spike")
+    anomaly.owner = "owner@example.com"
     trace = await DeciderClient(provider="mock").decide(anomaly)
     report = await OpenRouterNarrator().generate_report(anomaly, trace)
 
@@ -46,13 +47,15 @@ async def test_openrouter_report_uses_bounded_backend_request_and_validates_resp
     assert headers["HTTP-Referer"] == "https://sentinel.example"
     assert request["max_tokens"] == 900
     assert "response_format" in request
+    assert "models" not in request  # No model-level fallback can switch to a paid model.
+    assert "owner@example.com" not in json.dumps(request)
     assert "API_KEY" not in json.dumps(request)
 
 
 @pytest.mark.asyncio
 async def test_openrouter_bad_upstream_response_falls_back_truthfully(monkeypatch):
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "server-secret-test")
-    monkeypatch.setattr(settings, "OPENROUTER_MODEL", "verified/test-model")
+    monkeypatch.setattr(settings, "OPENROUTER_MODEL", "openrouter/free")
 
     class Client:
         async def __aenter__(self): return self

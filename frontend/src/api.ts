@@ -1,4 +1,5 @@
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, InvestigationReport, HealthInfo, Scenario } from "./types";
+import { getAccessToken } from "./supabase.ts";
 
 export class ApiError extends Error {
   readonly status?: number;
@@ -62,6 +63,12 @@ export async function requestJson<T>(path: string, init: RequestInit = {}, opera
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
+  try {
+    const accessToken = await getAccessToken();
+    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  } catch {
+    throw new ApiError("Your sign-in session could not be restored. Sign in again.", { endpoint });
+  }
   if (init.body !== undefined && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
   let response: Response;
@@ -191,4 +198,23 @@ export async function submitApprovalDecision(
   }, "Recording approval", environment);
   if (!isApproval(value)) throw new ApiError("The approval endpoint returned an unexpected response shape.", { endpoint: "/api/approvals/{approval_id}/decision" });
   return value;
+}
+
+export async function downloadPrivateReport(reportId: string): Promise<void> {
+  const result = await requestJson<{ url: string; expires_in: number }>(
+    `/api/reports/${encodeURIComponent(reportId)}/download`, {}, "Creating secure report download");
+  let signedUrl: URL;
+  try { signedUrl = new URL(result.url); } catch { throw new ApiError("The report service returned an invalid download link.", { endpoint: "/api/reports/{report_id}/download" }); }
+  const expected = import.meta.env.VITE_SUPABASE_URL;
+  if (!expected || signedUrl.origin !== new URL(expected).origin || signedUrl.protocol !== "https:") {
+    throw new ApiError("The report service returned a link outside the configured Supabase project.", { endpoint: "/api/reports/{report_id}/download" });
+  }
+  const response = await fetch(signedUrl, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new ApiError("The private report could not be downloaded. Request a fresh link and retry.", { status: response.status, endpoint: "/api/reports/{report_id}/download" });
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl; anchor.download = `${reportId}.json`; anchor.rel = "noopener";
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }

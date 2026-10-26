@@ -110,7 +110,11 @@ class DeciderClient:
             choice, probs, confidence, model_name, is_err, err_msg = self._call_mock_decider(
                 anomaly, normalized_state
             )
-            provider_label = "mock-simulated"
+            if self.provider == "rules":
+                provider_label = "deterministic-policy-rules"
+                model_name = "cloud-cost-policy-rules-v1"
+            else:
+                provider_label = "mock-simulated"
 
         latency_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
 

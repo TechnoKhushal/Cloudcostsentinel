@@ -325,7 +325,7 @@ async def test_api_analyze_compute_spike_flow():
         assert updated_appr["status"] == "approved"
         # Server extracts identity from authenticated principal, never blindly trusts client body
         assert updated_appr["reviewed_by"] is not None
-        assert "@" in updated_appr["reviewed_by"]
+        assert updated_appr["reviewed_by"] == "dev-lead-engineer"
 
 
 @pytest.mark.asyncio
@@ -510,8 +510,7 @@ def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephe
     monkeypatch.setenv("DATABASE_PATH", production_path)
     assert Settings().DATABASE_PATH == production_path
 
-    with pytest.raises(ValueError, match="outside temporary storage"):
-        Settings(
+    production = Settings(
             ENVIRONMENT="production",
             CORS_ORIGINS=["https://sentinel.example"],
             AUTH_ENABLED=True,
@@ -520,8 +519,13 @@ def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephe
             AUTH_AUDIENCE="sentinel-api",
             DECIDER_PROVIDER="http",
             STRANDS_DECIDER_URL="http://127.0.0.1:8080/v1/systemone",
+            SUPABASE_URL="https://sentinel.supabase.co",
+            SUPABASE_ANON_KEY="public-anon-placeholder",
+            NOTIFICATION_PROVIDER="disabled",
             DATABASE_PATH=str(Path(tempfile.gettempdir()) / "sentinel-prod.db"),
-        ).validate_startup()
+        )
+    production.validate_startup()
+    assert production.DATABASE_PATH.endswith("sentinel-prod.db")  # Supabase, not this ignored SQLite path, is production storage.
 
 
 @pytest.mark.asyncio
@@ -636,6 +640,22 @@ def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
         ).validate_startup()
 
 
+def test_production_rejects_shared_aws_cost_explorer_credentials():
+    settings = Settings(
+        ENVIRONMENT="production",
+        AUTH_ENABLED=True,
+        AUTH_AUDIENCE="authenticated",
+        SUPABASE_URL="https://project.supabase.co",
+        SUPABASE_ANON_KEY="public-key",
+        CORS_ORIGINS=["https://sentinel.example"],
+        DECIDER_PROVIDER="rules",
+        NOTIFICATION_PROVIDER="disabled",
+        AWS_COST_EXPLORER_ENABLED=True,
+    )
+    with pytest.raises(ValueError, match="scoped to an organization"):
+        settings.validate_startup()
+
+
 def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypatch):
     monkeypatch.setenv("RENDER", "true")
     with pytest.raises(ValueError, match="explicit ENVIRONMENT=demo or ENVIRONMENT=production"):
@@ -655,7 +675,7 @@ def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypat
 
 
 def test_production_rejects_sqlite_database_url():
-    with pytest.raises(ValueError, match="DATABASE_URL is not supported"):
+    with pytest.raises(ValueError, match="DATABASE_URL is not used"):
         Settings(
             ENVIRONMENT="production",
             CORS_ORIGINS=["https://sentinel.example"],
@@ -670,11 +690,13 @@ def test_production_rejects_sqlite_database_url():
 
 def test_production_auth_fixture_and_decider_startup_validation():
     # Production refuses AUTH_ENABLED=False (escape hatch removed)
+    supabase_settings = {"SUPABASE_URL": "https://sentinel.supabase.co", "SUPABASE_ANON_KEY": "public-anon-placeholder"}
     with pytest.raises(ValueError, match="AUTH_ENABLED must be True"):
         Settings(
             ENVIRONMENT="production",
             CORS_ORIGINS=["https://sentinel.internal"],
             AUTH_ENABLED=False,
+            **supabase_settings,
         ).validate_startup()
 
     # Production with AUTH_ENABLED=True requires OIDC config
@@ -700,6 +722,7 @@ def test_production_auth_fixture_and_decider_startup_validation():
             AUTH_AUDIENCE="api://sentinel",
             DECIDER_PROVIDER="mock",
             ENABLE_TEST_FIXTURE_ENDPOINT=True,
+            **supabase_settings,
         ).validate_startup()
 
     # HTTP decider cannot self-reference app's own port

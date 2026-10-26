@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tags](https://img.shields.io/badge/Tags-%23strands--decider--2b%20%7C%20%23policy-purple)](#hackathon-classification)
 
-> **CloudCost Sentinel** reviews synthetic or cloud usage metrics and explains cost anomalies. The public demo uses synthetic data. Explanations are deterministic offline by default; optional generative reports use OpenRouter from the backend only. Supabase schema work is present, but the API still uses SQLite and is not ready for tenant production data.
+> **CloudCost Sentinel** reviews cost evidence and explains anomalies. The public deployment remains a synthetic demo. The API now contains a Supabase Auth, caller-JWT PostgREST and private-report Storage production path, but migrations have not been applied to a live project and production is not yet verified or ready for customer data.
 
 ---
 
@@ -71,7 +71,7 @@ The pattern is packaged with:
 - **Decision Provider:** The default is a clearly labeled simulated policy evaluator. An HTTP Decider can be configured separately.
 - **Investigation Reports:** Deterministic grounded templates work offline. Optional OpenRouter generation is backend-only and model-selected by environment; it never changes the deterministic decision.
 - **Zero-Mutation AWS Safety Sandbox:** Read-only telemetry access. CloudCost Sentinel never executes unverified deletions, instance terminations, or resizing operations on live AWS accounts.
-- **Single-Transition Human Approvals:** Approvals in the Sentinel dashboard update internal review states in the SQLite audit log with 409 Conflict replay protection.
+- **Single-Transition Human Approvals:** Supabase production updates are tenant-scoped and use a pending-state compare-and-set; local/demo storage retains SQLite behavior.
 - **Calibrated Low-Confidence Fallback:** When telemetry is sparse or ambiguous, Decider's confidence drops below threshold; the system automatically and visibly escalates to `request_approval`.
 - **Reproducible Synthetic Scenarios:** Includes 5 deterministic scenarios (Compute Runaway, Database Drift, Batch Surge, Stable Baseline, Sparse Telemetry).
 - **Dark Cloud Operations Command Center:** Built with React 19, TypeScript, Vite, and Recharts, providing instant scenario replay, live confidence gauges, and collapsible wire traces.
@@ -125,13 +125,15 @@ Open `http://localhost:5173` in your browser.
 | `DECIDER_MODEL_ID` | `StrandsAgents/strands-decider-2B-hobson-v19` | Strands Decider model identifier |
 | `DECIDER_MIN_CONFIDENCE` | `0.65` | Confidence threshold below which the agent conservatively falls back to `request_approval` |
 | `OPENROUTER_API_KEY` | unset | Optional server-only key. Leave unset for offline deterministic reports. |
-| `OPENROUTER_MODEL` | unset | Required with the key; choose a currently available model. No model is assumed available by default. |
+| `OPENROUTER_MODEL` | unset | Required with the key; use `openrouter/free` or a verified model variant ending in `:free`. Paid model IDs are rejected. |
 | `OPENROUTER_HTTP_REFERER` | unset | Optional app URL attribution header. |
 | `AWS_REGION` | `us-east-1` | AWS region for Cost Explorer. |
 | `AWS_COST_EXPLORER_ENABLED`| `false` | Read-only live AWS Cost Explorer queries (disabled by default) |
 | `AUTH_ENABLED` | `false` | Local development only. Public production requires `true` and complete OIDC/JWKS configuration. Explicit `demo` mode is synthetic-only. |
 | `NOTIFICATION_PROVIDER` | `mock` | `disabled`, `mock`, or `sns` (AWS Simple Notification Service) |
-| `DATABASE_PATH` | `backend/data/sentinel.db` locally; `/tmp/cloudcost-sentinel.db` for Render demo when unset | Current SQLite path. Render demo temp storage is ephemeral. Supabase persistence is not wired into API yet. |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Required for production | Supabase project origin and public anon/publishable key. Production uses the caller JWT and RLS; no service-role key. |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | Required for authenticated frontend | Public Supabase URL/key only. |
+| `DATABASE_PATH` | Local/demo only | SQLite path for development or explicitly configured synthetic demo. Production never falls back to SQLite. |
 | `DATABASE_URL` | unset | Unsupported; startup refuses it rather than silently ignoring it. |
 
 Detailed documentation:
@@ -157,14 +159,14 @@ Detailed documentation:
 3. Restart the API. Configuration does not prove provider connectivity; no live Decider endpoint or checkpoint was verified for this release.
 
 ### Connecting OpenRouter (optional)
-Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` in the backend environment only. Choose a currently available model from [OpenRouter's model catalog](https://openrouter.ai/models); pricing and availability can change. The [free-model collection](https://openrouter.ai/collections/free-models) currently lists zero-priced models, but capacity and rate limits can vary. The app has no default model and never places the key in Vite/browser variables. If unset or unavailable, it shows a clearly labeled deterministic fallback.
+Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL=openrouter/free` in the backend environment only, or choose a verified model variant ending in `:free`. The backend rejects paid model IDs and does not configure a paid-model fallback. OpenRouter's [free router](https://openrouter.ai/openrouter/free) currently routes only to free variants, though availability and rate limits can change. The app has no default model and never places the key in Vite/browser variables. If unset or unavailable, it uses a clearly labeled deterministic fallback.
 
 ### Supabase status
-The initial migration is documented in [Supabase setup](docs/SUPABASE_SETUP.md). It has not been applied to a project, and the backend does not yet use it; the current SQLite demo is ephemeral on Render.
+The three ordered migrations and deployment steps are documented in [Supabase setup](docs/SUPABASE_SETUP.md). The production adapter is implemented, but no live Supabase project was available to apply or verify the migrations, RLS policies or storage access. Do not enable production traffic until the documented two-account isolation and browser checks pass.
 
 ## 7. Hosted Demo / Production Status
 
-For the explicit simulated Render + Vercel demo setup, follow [docs/DEMO_DEPLOYMENT.md](docs/DEMO_DEPLOYMENT.md). Do not use `ENVIRONMENT=development` for hosted Render. Production remains blocked until the frontend has a complete OIDC flow and the backend has verified durable storage and provider integrations.
+For the explicit simulated Render + Vercel demo setup, follow [docs/DEMO_DEPLOYMENT.md](docs/DEMO_DEPLOYMENT.md). Do not use `ENVIRONMENT=development` for hosted Render. Production remains blocked until the migrations are applied and verified, tenant isolation and browser flows pass against an isolated project, organization-scoped cloud accounts and invitation/member management exist, and deployment configuration and production controls are verified.
 
 ---
 
@@ -192,7 +194,7 @@ python scripts/benchmark_decider.py --trials 10 --warmup 2
 
 - **Read-Only Telemetry:** AWS Cost Explorer queries are strictly read-only (`ce:GetCostAndUsage`).
 - **No Cloud Destruction:** CloudCost Sentinel never executes unverified deletions, instance terminations, or resizing operations on live AWS accounts.
-- **Human-in-the-Loop:** Approvals recorded in the dashboard update internal review states in the SQLite audit log with 409 Conflict replay protection.
+- **Human-in-the-Loop:** Approval transitions are atomic and tenant-scoped in Supabase in production; SQLite remains for local/demo mode.
 
 ---
 

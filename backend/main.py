@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -14,11 +15,13 @@ from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from .auth import AuthenticatedPrincipal, require_reviewer, require_viewer
 from .config import settings
 from .database.db import ApprovalConflictError, DatabaseRepository
+from .database.supabase import SupabaseRepository, SupabaseStoreError, supabase_repository
 from .models.approval import ApprovalItem
 from .models.cost import CostAnomaly
 from .models.decision import DeciderResponseTrace
@@ -42,7 +45,12 @@ async def lifespan(app: FastAPI):
     settings.validate_startup()
     try:
         db.initialize()
-    except (OSError, sqlite3.Error) as exc:
+        if settings.ENVIRONMENT == "production" and not await run_in_threadpool(db.check_ready):
+            raise RuntimeError("Supabase readiness check failed.")
+    except (OSError, sqlite3.Error, SupabaseStoreError, RuntimeError) as exc:
+        if isinstance(db, SupabaseRepository):
+            logger.error("Supabase startup check failed (%s).", type(exc).__name__)
+            raise RuntimeError("Supabase is unavailable or not configured; production startup is blocked.") from None
         database_dir = Path(settings.DATABASE_PATH).expanduser().resolve().parent
         logger.exception("SQLite initialization failed for directory %s", database_dir)
         raise RuntimeError(
@@ -50,13 +58,11 @@ async def lifespan(app: FastAPI):
             "For an ephemeral Render demo without a mounted disk, set DATABASE_PATH=/tmp/cloudcost-sentinel.db; "
             "for persistent data, attach a writable disk and set DATABASE_PATH to its mount."
         ) from None
-    db_file = Path(settings.DATABASE_PATH).expanduser().resolve()
-    temporary_dir = Path(tempfile.gettempdir()).resolve()
-    if settings.ENVIRONMENT == "demo" and db_file.is_relative_to(temporary_dir):
-        logger.warning(
-            "Demo SQLite database uses ephemeral temporary storage at %s; records can disappear on restart or redeploy.",
-            db_file,
-        )
+    if isinstance(db, DatabaseRepository):
+        db_file = Path(settings.DATABASE_PATH).expanduser().resolve()
+        temporary_dir = Path(tempfile.gettempdir()).resolve()
+        if settings.ENVIRONMENT == "demo" and db_file.is_relative_to(temporary_dir):
+            logger.warning("Demo SQLite database uses ephemeral temporary storage; records may disappear after restart.")
     logger.info(
         "CloudCost Sentinel starting in environment='%s', auth_enabled=%s, decider_provider='%s', narrator_provider='%s'",
         settings.ENVIRONMENT,
@@ -75,6 +81,16 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(SupabaseStoreError)
+async def handle_supabase_store_error(request: Request, exc: SupabaseStoreError) -> JSONResponse:
+    if exc.status_code in {401, 403}:
+        return JSONResponse(status_code=403, content={"detail": "Workspace access denied."})
+    if exc.status_code == 409:
+        return JSONResponse(status_code=409, content={"detail": "The requested record conflicts with its current state."})
+    logger.warning("Supabase operation failed with status class %s.", str(exc.status_code)[:3])
+    return JSONResponse(status_code=503, content={"detail": "Persistent storage is temporarily unavailable. Retry shortly."})
+
+
 @app.get("/", tags=["Health"], include_in_schema=False)
 async def get_root() -> Dict[str, str]:
     """Give operators a harmless pointer to the liveness endpoint at the service root."""
@@ -85,13 +101,16 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
+    max_age=600,
 )
 
-# Services & Storage. Repository construction is side-effect-free; schema/directory
-# initialization occurs in lifespan after environment validation.
-db = DatabaseRepository(settings.DATABASE_PATH)
+# Production never constructs or falls back to SQLite. SQLite remains a local/demo
+# adapter; production uses PostgREST with the caller's JWT and database RLS.
+db: DatabaseRepository | SupabaseRepository = (
+    supabase_repository if settings.ENVIRONMENT == "production" else DatabaseRepository(settings.DATABASE_PATH)
+)
 decider_client = DeciderClient()
 narrator = OpenRouterNarrator()
 cost_explorer = AWSCostExplorerService()
@@ -148,6 +167,18 @@ class ApprovalDecisionRequest(BaseModel):
     notes: Optional[str] = Field(default="Reviewed in CloudCost Sentinel dashboard.", max_length=1000)
 
 
+class ProfileUpdateRequest(BaseModel):
+    display_name: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
 # ------------------------------------------------------------------------------
 # Health & Readiness Endpoints
 # ------------------------------------------------------------------------------
@@ -170,6 +201,9 @@ async def get_health() -> Dict[str, Any]:
     if settings.DECIDER_PROVIDER == "mock":
         decider_state = "simulated"
         reported_model = "demo-policy-evaluator-v1"
+    elif settings.DECIDER_PROVIDER == "rules":
+        decider_state = "available"
+        reported_model = "cloud-cost-policy-rules-v1"
     elif settings.DECIDER_PROVIDER == "http":
         decider_state = "configured_unverified"
         reported_model = settings.DECIDER_MODEL_ID
@@ -218,6 +252,10 @@ async def get_health() -> Dict[str, Any]:
                 ),
             },
         },
+        "persistence": {
+            "provider": "supabase" if isinstance(db, SupabaseRepository) else "sqlite",
+            "state": "configured_unverified" if isinstance(db, SupabaseRepository) else "demo_or_local",
+        },
         "safety_guarantee": "Read-only telemetry and decision guidance. Zero automatic cloud mutation.",
     }
 
@@ -225,11 +263,11 @@ async def get_health() -> Dict[str, Any]:
 @app.get("/api/health/ready", tags=["Health"])
 async def get_health_ready(response: Response) -> Dict[str, Any]:
     """Readiness reflects local storage and required production provider state."""
-    database_ready = db.check_ready()
-    decider_state = "simulated" if settings.DECIDER_PROVIDER == "mock" else "configured_unverified"
+    database_ready = await run_in_threadpool(db.check_ready)
+    decider_state = "simulated" if settings.DECIDER_PROVIDER == "mock" else "available" if settings.DECIDER_PROVIDER == "rules" else "configured_unverified"
     narrator_state = "configured_unverified" if settings.OPENROUTER_API_KEY else "offline"
     providers_ready = settings.ENVIRONMENT == "demo" or (
-        decider_state == "connected"
+        decider_state in {"connected", "available"}
     )
     ready = database_ready and providers_ready
     if not ready:
@@ -239,6 +277,7 @@ async def get_health_ready(response: Response) -> Dict[str, Any]:
         "environment": settings.ENVIRONMENT,
         "checks": {
             "database": "connected" if database_ready else "unavailable",
+            "persistence_provider": "supabase" if isinstance(db, SupabaseRepository) else "sqlite",
             "decider": decider_state,
             "narrator": narrator_state,
         },
@@ -253,7 +292,26 @@ async def get_scenarios(
     principal: AuthenticatedPrincipal = Depends(require_viewer),
 ) -> List[Dict[str, str]]:
     """List available deterministic synthetic scenarios."""
+    if settings.ENVIRONMENT == "production":
+        return []
     return CostScenarioRegistry.get_all_scenarios()
+
+
+@app.get("/api/account/profile", tags=["Account"])
+async def get_account_profile(principal: AuthenticatedPrincipal = Depends(require_viewer)) -> Dict[str, Any]:
+    if isinstance(db, SupabaseRepository):
+        return await run_in_threadpool(db.get_profile)
+    return {"user_id": principal.sub, "display_name": None, "organization_id": None, "role": principal.roles[0]}
+
+
+@app.put("/api/account/profile", tags=["Account"])
+async def update_account_profile(
+    req: ProfileUpdateRequest,
+    principal: AuthenticatedPrincipal = Depends(require_viewer),
+) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="Profile persistence requires the production Supabase workspace.")
+    return await run_in_threadpool(db.update_profile, req.display_name)
 
 
 # ------------------------------------------------------------------------------
@@ -266,9 +324,8 @@ async def analyze_anomaly(
 ) -> Dict[str, Any]:
     """Analyze cloud spend anomaly, invoke Strands Decider 2B, and generate investigation report."""
     logger.info(
-        "Executing analysis requested by %s for scenario_id: %s (AWS live: %s)",
-        principal.email,
-        req.scenario_id,
+        "Executing analysis for authenticated user %s (AWS live: %s)",
+        principal.sub[:8],
         req.use_aws_cost_explorer,
     )
 
@@ -296,6 +353,8 @@ async def analyze_anomaly(
         cost_data_source = "custom_supplied"
         anomaly = req.custom_anomaly
     else:
+        if settings.ENVIRONMENT == "production":
+            raise HTTPException(status_code=400, detail="Synthetic scenarios are disabled in production. Connect Cost Explorer or submit validated cost telemetry.")
         scenario_id = req.scenario_id or "compute_spike"
         valid_ids = [s["id"] for s in CostScenarioRegistry.get_all_scenarios()]
         if scenario_id not in valid_ids:
@@ -305,12 +364,8 @@ async def analyze_anomaly(
             )
         anomaly = CostScenarioRegistry.generate_scenario_anomaly(scenario_id)
 
-    # Persist anomaly
-    db.save_anomaly(anomaly)
-
     # 2. Invoke Strands Decider 2B for signature decision
     trace: DeciderResponseTrace = await decider_client.decide(anomaly)
-    db.save_decision_trace(anomaly.anomaly_id, trace)
 
     # 3. Handle downstream execution path
     approval_item: Optional[ApprovalItem] = None
@@ -328,11 +383,17 @@ async def analyze_anomaly(
             created_at=datetime.now(timezone.utc).isoformat(),
             is_simulated=anomaly.is_simulated,
         )
-        db.save_approval(approval_item)
 
     # 4. Generate a grounded report with OpenRouter or the deterministic offline fallback
     report: InvestigationReport = await narrator.generate_report(anomaly, trace)
-    db.save_report(report)
+    if isinstance(db, SupabaseRepository):
+        await run_in_threadpool(db.save_analysis_bundle, anomaly, cost_data_source, trace, approval_item, report)
+    else:
+        await run_in_threadpool(db.save_anomaly, anomaly)
+        await run_in_threadpool(db.save_decision_trace, anomaly.anomaly_id, trace)
+        if approval_item:
+            await run_in_threadpool(db.save_approval, approval_item)
+        await run_in_threadpool(db.save_report, report)
 
     return {
         "anomaly": anomaly,
@@ -355,7 +416,7 @@ async def get_decisions(
     principal: AuthenticatedPrincipal = Depends(require_viewer),
 ) -> List[DeciderResponseTrace]:
     """Retrieve recent decision traces with bounded limit."""
-    return db.get_recent_decisions(limit=limit)
+    return await run_in_threadpool(db.get_recent_decisions, limit=limit)
 
 
 @app.get("/api/approvals", tags=["Approvals"])
@@ -364,7 +425,7 @@ async def get_approvals(
     principal: AuthenticatedPrincipal = Depends(require_viewer),
 ) -> List[ApprovalItem]:
     """Retrieve human approval queue."""
-    return db.get_approvals(status=status)
+    return await run_in_threadpool(db.get_approvals, status=status)
 
 
 @app.post("/api/approvals/{approval_id}/decision", tags=["Approvals"])
@@ -380,9 +441,10 @@ async def record_approval_decision(
     - Transitions from pending to approved/rejected exactly once (409 Conflict on replay).
     - Only updates local review queue. Never mutates live cloud resources.
     """
-    reviewer_identity = principal.email or principal.sub
+    reviewer_identity = principal.sub
     try:
-        updated = db.update_approval_status(
+        updated = await run_in_threadpool(
+            db.update_approval_status,
             approval_id=approval_id,
             status=req.action,
             reviewed_by=reviewer_identity,
@@ -400,8 +462,24 @@ async def record_approval_decision(
             detail=f"Approval item '{approval_id}' not found.",
         )
 
-    logger.info("Approval %s marked as %s by verified reviewer %s", approval_id, req.action, reviewer_identity)
+    logger.info("Approval %s marked as %s by verified reviewer %s", approval_id, req.action, principal.sub[:8])
     return updated
+
+
+@app.get("/api/reports/{report_id}/download", tags=["Reports"])
+async def create_report_download(
+    report_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_viewer),
+) -> Dict[str, Any]:
+    """Return a short-lived private Storage URL after a tenant-scoped ownership check."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", report_id):
+        raise HTTPException(status_code=422, detail="Invalid report identifier.")
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="Private report downloads are unavailable in local/demo storage.")
+    result = await run_in_threadpool(db.create_signed_report_url, report_id, 90)
+    if not result:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    return result
 
 
 # ------------------------------------------------------------------------------

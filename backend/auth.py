@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import AsyncIterator, List, Optional
+from contextvars import Token
 
 import jwt
 from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .config import settings
+from .database.supabase import SupabaseStoreError, supabase_repository
 
 logger = logging.getLogger("cloudcost_sentinel.auth")
 
@@ -24,13 +27,16 @@ def _get_jwks_client() -> PyJWKClient:
     """Lazily create and cache the PyJWKClient singleton."""
     global _jwks_client
     if _jwks_client is None:
-        if not settings.AUTH_JWKS_URL:
+        jwks_url = settings.AUTH_JWKS_URL or (
+            f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json" if settings.SUPABASE_URL else None
+        )
+        if not jwks_url:
             raise RuntimeError(
                 "AUTH_JWKS_URL is required when AUTH_ENABLED=true. "
                 "Set it to your OIDC provider's JWKS endpoint, e.g. "
                 "https://cognito-idp.us-east-1.amazonaws.com/<pool_id>/.well-known/jwks.json"
             )
-        _jwks_client = PyJWKClient(settings.AUTH_JWKS_URL, cache_keys=True)
+        _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
     return _jwks_client
 
 
@@ -39,9 +45,17 @@ class AuthenticatedPrincipal(BaseModel):
     email: str = Field(description="Verified email or identity")
     roles: List[str] = Field(default_factory=lambda: ["viewer"])
     is_authenticated: bool = Field(default=False, description="True if verified via JWT; False if dev bypass")
+    organization_id: Optional[str] = Field(default=None, exclude=True, repr=False)
+    access_token: Optional[str] = Field(default=None, exclude=True, repr=False)
 
     def has_role(self, role: str) -> bool:
-        return "admin" in self.roles or role in self.roles
+        if "admin" in self.roles or "owner" in self.roles:
+            return True
+        if role == "viewer":
+            return bool(set(self.roles) & {"viewer", "reader", "member", "reviewer"})
+        if role == "reviewer":
+            return bool(set(self.roles) & {"reviewer"})
+        return role in self.roles
 
 
 def get_current_principal(
@@ -92,17 +106,19 @@ def get_current_principal(
         signing_key = jwks_client.get_signing_key_from_jwt(token)
 
         # Validate signature, expiry, issuer, and audience in a single call.
+        issuer = settings.AUTH_ISSUER or f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1"
+        audience = settings.AUTH_AUDIENCE or "authenticated"
         claims = jwt.decode(
             token,
             signing_key.key,
-            algorithms=["RS256"],
-            issuer=settings.AUTH_ISSUER,
-            audience=settings.AUTH_AUDIENCE,
+            algorithms=["RS256", "ES256"],
+            issuer=issuer,
+            audience=audience,
             options={
                 "verify_signature": True,
                 "verify_exp": True,
-                "verify_iss": bool(settings.AUTH_ISSUER),
-                "verify_aud": bool(settings.AUTH_AUDIENCE),
+                "verify_iss": True,
+                "verify_aud": True,
             },
         )
 
@@ -125,6 +141,7 @@ def get_current_principal(
             email=email,
             roles=roles,
             is_authenticated=True,
+            access_token=token,
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
@@ -145,14 +162,14 @@ def get_current_principal(
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
     except (jwt.InvalidSignatureError, jwt.DecodeError) as sig_err:
-        logger.warning("JWT signature/decode failure: %s", sig_err)
+        logger.warning("JWT signature/decode failure (%s).", type(sig_err).__name__)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token signature verification failed.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
     except Exception as exc:
-        logger.warning("Token verification failed: %s", exc)
+        logger.warning("Token verification failed (%s).", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token.",
@@ -160,25 +177,42 @@ def get_current_principal(
         )
 
 
-def require_viewer(
+async def _resolve_workspace(principal: AuthenticatedPrincipal) -> Optional[Token]:
+    if not (principal.is_authenticated and settings.SUPABASE_URL):
+        return None
+    try:
+        scope = await run_in_threadpool(supabase_repository.resolve_scope, principal.sub, principal.access_token or "")
+    except SupabaseStoreError as exc:
+        code = status.HTTP_403_FORBIDDEN if exc.status_code == 403 else status.HTTP_503_SERVICE_UNAVAILABLE
+        raise HTTPException(code, "Workspace access could not be verified. Try again later.") from None
+    principal.organization_id = scope.organization_id
+    principal.roles = [scope.role]
+    return supabase_repository.set_scope(scope)
+
+
+async def require_viewer(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
-) -> AuthenticatedPrincipal:
+) -> AsyncIterator[AuthenticatedPrincipal]:
     """Requires viewer or reviewer role."""
-    if not principal.has_role("viewer") and not principal.has_role("reviewer"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: viewer or reviewer role required.",
-        )
-    return principal
+    scope_token = await _resolve_workspace(principal)
+    try:
+        if not principal.has_role("viewer"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: workspace membership required.")
+        yield principal
+    finally:
+        if scope_token is not None:
+            supabase_repository.reset_scope(scope_token)
 
 
-def require_reviewer(
+async def require_reviewer(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
-) -> AuthenticatedPrincipal:
+) -> AsyncIterator[AuthenticatedPrincipal]:
     """Requires reviewer role (for approving/rejecting remediation items)."""
-    if not principal.has_role("reviewer"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: reviewer role required to record approval decisions.",
-        )
-    return principal
+    scope_token = await _resolve_workspace(principal)
+    try:
+        if not principal.has_role("reviewer"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: reviewer role required.")
+        yield principal
+    finally:
+        if scope_token is not None:
+            supabase_repository.reset_scope(scope_token)

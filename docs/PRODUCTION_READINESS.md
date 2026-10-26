@@ -1,5 +1,15 @@
 # Production readiness and deployment configuration
 
+## Current state after Supabase code integration (2026-10-27)
+
+The backend and frontend now include a Supabase Auth and user-JWT persistence implementation, but the code has **not** been connected to an applied Supabase schema. Live Render still reports `environment=demo`; Vercel still serves a prior built bundle. Therefore authenticated production remains **NOT READY**.
+
+Completed in source: Supabase backend repository and readiness check; personal workspace bootstrap; tenant-filtered PostgREST operations; atomic analysis/decision/approval/report metadata RPC; private report upload and short-lived signed download; profile read/update; frontend registration, login, email confirmation flow, password reset/recovery and logout; production startup guards; free-model-only OpenRouter validation; shared AWS credential rejection; lazy chart chunking; full backend test discovery in CI.
+
+Still required: apply and verify all three migrations on a dedicated Supabase project; test signing key configuration, RLS and Storage isolation using two test users; complete browser end-to-end checks; implement organization/member/invitation and cloud-account management, per-tenant AWS access, API quotas/rate limiting and report retention/deletion; verify actual Render/Vercel settings and deployed SHAs; validate production backups and recovery. See [Supabase setup](SUPABASE_SETUP.md) and [verification log](audit/VERIFICATION.md).
+
+The remainder of this document records the earlier 2026-10-26 demo audit and its historical checks.
+
 Audit date: 2026-10-26
 Current source revision audited: `43df07d23ea2c5262d34079926454d2db59b78c2` before audit documentation changes.
 

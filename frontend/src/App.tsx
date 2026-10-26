@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Activity, RefreshCw } from "lucide-react";
 import { Header } from "./components/Header";
 import { ScenarioControls } from "./components/ScenarioControls";
 import { OverviewCards } from "./components/OverviewCards";
-import { SpendChart } from "./components/SpendChart";
+const SpendChart = lazy(() => import("./components/SpendChart").then(({ SpendChart }) => ({ default: SpendChart })));
 import { DecisionPanel } from "./components/DecisionPanel";
 import { InvestigationReportPanel } from "./components/InvestigationReportPanel";
 import { ApprovalsFeed } from "./components/ApprovalsFeed";
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, InvestigationReport, HealthInfo, Scenario } from "./types";
-import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, submitApprovalDecision } from "./api";
+import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, submitApprovalDecision, downloadPrivateReport } from "./api";
 import { buildAnalysisCsv, buildExecutiveBrief, downloadAnalysisCsv } from "./analysisExport";
 
 type ResourceKey = "health" | "scenarios" | "decisions" | "approvals";
@@ -63,7 +63,7 @@ export const App = () => {
     setAnalyzing(true);
     setAnalysisError(null);
     try {
-      const result = await runAnalysis(scenarioId, false, controller.signal);
+      const result = await runAnalysis(scenarioId, scenarioId === "__aws_cost_explorer__", controller.signal);
       if (!mounted.current || controller.signal.aborted) return;
       hasAnomalyRef.current = true;
       setAnomaly(result.anomaly);
@@ -94,7 +94,8 @@ export const App = () => {
       approvals: approvalResult.status === "rejected" ? toError(approvalResult.reason) : null,
     });
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
-    if (scenarioResult.status === "fulfilled" && scenarioResult.value.length === 0) {
+    if (scenarioResult.status === "fulfilled" && scenarioResult.value.length === 0
+      && !(healthResult.status === "fulfilled" && healthResult.value.environment === "production")) {
       setResourceErrors((current) => ({ ...current, scenarios: new Error("The backend returned no scenarios. Check configuration and retry.") }));
     }
     if (scenarioResult.status === "fulfilled") {
@@ -156,6 +157,12 @@ export const App = () => {
     }
   };
 
+  const handleReportDownload = async () => {
+    if (!report) return;
+    try { await downloadPrivateReport(report.report_id); notify("Private report downloaded."); }
+    catch (error) { const failure = toError(error); notify(failure.message, true); }
+  };
+
   const handleScenario = (id: string) => {
     selectedIdRef.current = id;
     setSelectedScenarioId(id);
@@ -215,9 +222,6 @@ export const App = () => {
       {health?.environment === "demo" && (
         <div className="public-demo-notice" role="status"><strong>SIMULATED DEMO</strong> · Synthetic cost data only. Provider responses are simulated, records may be shared, and no AWS action is executed.</div>
       )}
-      {health?.auth?.enabled && health.auth.mode === "jwt_bearer" && (
-        <div className="auth-notice" role="status">This API requires an authorized account. Actions are checked by the backend; this dashboard does not provide sign-in.</div>
-      )}
 
       {initializing && <div className="loading-panel" role="status"><span className="spinner" /> Connecting to the CloudCost Sentinel API and loading dashboard data…</div>}
       {backendUnreachable && <div className="error-panel" role="alert">
@@ -241,6 +245,9 @@ export const App = () => {
         loading={analyzing || refreshing || initializing}
         scenariosError={resourceErrors.scenarios?.message ?? null}
         onRetryScenarios={handleRefresh}
+        productionMode={health?.environment === "production"}
+        costExplorerEnabled={health?.providers.cost_explorer.enabled ?? false}
+        onRunLiveAnalysis={() => void executeAnalysis("__aws_cost_explorer__")}
       />
 
       {analysisError && <div className="error-panel" role="alert"><div><strong>Analysis did not complete</strong><p>{analysisError.message}{analysisError instanceof ApiError && analysisError.endpoint ? ` · ${analysisError.endpoint}` : ""}{analysisError instanceof ApiError && analysisError.status ? ` · HTTP ${analysisError.status}` : ""}{analysisError instanceof ApiError && analysisError.requestId ? ` · Request ID: ${analysisError.requestId}` : ""}</p></div><button className="btn btn-secondary" onClick={handleRetry} disabled={analyzing || scenarios.length === 0}>Retry analysis</button></div>}
@@ -251,12 +258,12 @@ export const App = () => {
       {toast && <div className={`toast ${toast.error ? "toast-error" : "toast-success"}`} role={toast.error ? "alert" : "status"} aria-live={toast.error ? "assertive" : "polite"}>{toast.text}<button type="button" onClick={() => setToast(null)} aria-label="Dismiss notification">×</button></div>}
 
       {anomaly && <OverviewCards metrics={anomaly.metrics} service={anomaly.service} environment={anomaly.environment} />}
-      {!anomaly && !initializing && !analysisError && <div className="empty-panel">Choose a scenario and run an analysis to see cost signals and recommendations.</div>}
+      {!anomaly && !initializing && !analysisError && <div className="empty-panel">{health?.environment === "production" ? "No analysis yet. Connect read-only AWS Cost Explorer to load real spend evidence." : "Choose a scenario and run an analysis to see cost signals and recommendations."}</div>}
 
       <div className="dashboard-grid">
         <div className="dashboard-column">
-          {anomaly ? <SpendChart data={anomaly.time_series} baseline={anomaly.metrics.baseline_spend} service={anomaly.service} /> : <section className="panel-card empty-panel"><h2>Spend telemetry</h2><p>Chart data will appear after a scenario analysis completes.</p></section>}
-          {report ? <InvestigationReportPanel report={report} /> : <section className="panel-card empty-panel"><h2>Investigation report</h2><p>Grounded recommendations will appear after analysis. Provider mode is reported by the API above.</p></section>}
+          {anomaly ? <Suspense fallback={<section className="panel-card empty-panel" aria-busy="true"><h2>Spend telemetry</h2><p>Loading chart…</p></section>}><SpendChart data={anomaly.time_series} baseline={anomaly.metrics.baseline_spend} service={anomaly.service} /></Suspense> : <section className="panel-card empty-panel"><h2>Spend telemetry</h2><p>Chart data will appear after a scenario analysis completes.</p></section>}
+          {report ? <InvestigationReportPanel report={report} canDownload={health?.persistence?.provider === "supabase"} onDownload={() => void handleReportDownload()} /> : <section className="panel-card empty-panel"><h2>Investigation report</h2><p>Grounded recommendations will appear after analysis. Provider mode is reported by the API above.</p></section>}
         </div>
         <div className="dashboard-column">
           {decision ? <DecisionPanel decision={decision} /> : <section className="panel-card empty-panel"><h2>Decision recommendation</h2><p>The policy recommendation will appear after analysis.</p></section>}

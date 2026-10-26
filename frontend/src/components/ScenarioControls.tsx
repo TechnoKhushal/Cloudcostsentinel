@@ -1,4 +1,4 @@
-import { AlertCircle, Flame, Play, RotateCcw } from "lucide-react";
+import { AlertCircle, Flame, Play, RotateCcw, Cloud } from "lucide-react";
 import type { Scenario } from "../types";
 
 interface ScenarioControlsProps {
@@ -11,9 +11,18 @@ interface ScenarioControlsProps {
   loading: boolean;
   scenariosError?: string | null;
   onRetryScenarios?: () => void;
+  productionMode?: boolean;
+  costExplorerEnabled?: boolean;
+  onRunLiveAnalysis?: () => void;
 }
 
-export const ScenarioControls = ({ scenarios, selectedScenarioId, onSelectScenario, onRunAnalysis, onSimulateSpike, onReset, loading, scenariosError, onRetryScenarios }: ScenarioControlsProps) => (
+export const ScenarioControls = ({ scenarios, selectedScenarioId, onSelectScenario, onRunAnalysis, onSimulateSpike, onReset, loading, scenariosError, onRetryScenarios, productionMode = false, costExplorerEnabled = false, onRunLiveAnalysis }: ScenarioControlsProps) => productionMode ? (
+  <section className="scenario-toolbar" aria-label="Production cost analysis">
+    <div className="scenario-select-group"><span className="status-pill">PRODUCTION · NO SAMPLE DATA</span><p className="empty-copy">Only connected cost telemetry is analyzed. Synthetic scenarios are disabled.</p></div>
+    <div className="toolbar-buttons"><button type="button" className="btn btn-primary" onClick={onRunLiveAnalysis} disabled={loading || !costExplorerEnabled}><Cloud size={15} aria-hidden="true" />{loading ? "Analyzing…" : "Analyze AWS Cost Explorer"}</button></div>
+    {!costExplorerEnabled && <p className="inline-error">Cost Explorer is disabled. Configure a read-only AWS role and enable it to analyze live spend.</p>}
+  </section>
+) : (
   <>
     <div className="simulated-banner"><div><AlertCircle size={16} aria-hidden="true" /><span><strong>SYNTHETIC SCENARIOS</strong> · Reproducible sample telemetry. No real cloud operations run.</span></div><span className="banner-meta">#finops · #policy-review</span></div>
     <section className="scenario-toolbar" aria-label="Scenario analysis controls">

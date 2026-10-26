@@ -57,7 +57,7 @@ class OpenRouterNarrator:
         """Call OpenRouter with bounded evidence, output and timeout; never log prompt data."""
         try:
             evidence = {"service": anomaly.service[:120], "environment": anomaly.environment[:80], "criticality": anomaly.criticality,
-                "owner": anomaly.owner[:120], "current_daily_spend": round(anomaly.metrics.current_spend, 2),
+                "owner_known": anomaly.owner != "unknown", "current_daily_spend": round(anomaly.metrics.current_spend, 2),
                 "baseline_daily_spend": round(anomaly.metrics.baseline_spend, 2), "delta_percentage": round(anomaly.metrics.delta_percentage, 2),
                 "persistence_days": anomaly.metrics.persistence_days, "monthly_budget": round(anomaly.metrics.monthly_budget, 2),
                 "decision": trace.action, "confidence": round(trace.confidence, 3)}
@@ -98,10 +98,10 @@ class OpenRouterNarrator:
         """Deterministic grounded narrative adapter for demo and local offline modes.
 
         Guaranteed grounded strictly against the telemetry values.
-        Explicitly marked with is_simulated=True and provider='grounded-template-fallback'.
+        Marked as simulated only when its source anomaly is itself simulated.
         """
         metrics = anomaly.metrics
-        owner_text = f"owned by {anomaly.owner}" if anomaly.owner != "unknown" else "with unassigned/unknown ownership"
+        owner_text = "with assigned ownership" if anomaly.owner != "unknown" else "with unassigned/unknown ownership"
 
         observed_facts = [
             f"Daily spend on {anomaly.service} in {anomaly.environment} rose from a baseline of ${metrics.baseline_spend:,.2f} to ${metrics.current_spend:,.2f} (+${metrics.delta_amount:,.2f}/day).",
@@ -131,7 +131,7 @@ class OpenRouterNarrator:
         elif trace.action == "notify_owner":
             audit_explanation = (
                 f"Strands Decider 2B selected 'notify_owner' (confidence: {trace.confidence:.2f}). "
-                f"Because the resource owner ({anomaly.owner}) is verified and the anomaly has persisted for {metrics.persistence_days} day(s), "
+                f"Because ownership is assigned and the anomaly has persisted for {metrics.persistence_days} day(s), "
                 f"direct notification enables prompt root-cause investigation while avoiding disruptive remediation in {anomaly.environment}."
             )
             likely_areas = [
@@ -140,7 +140,7 @@ class OpenRouterNarrator:
                 "Data ingestion rate increases from upstream streaming pipelines.",
             ]
             recommendations = [
-                f"Dispatched automated alert to owner {anomaly.owner} with telemetry summary.",
+                "Prepare an owner notification for review; this analysis did not send a message.",
                 "Request the engineering owner to review scaling policies and provisioned limits.",
                 "Re-evaluate spend telemetry in 24 hours to observe trend trajectory.",
             ]
@@ -190,6 +190,6 @@ class OpenRouterNarrator:
             follow_up_checklist=follow_up,
             provider="grounded-template-fallback",
             model_id="deterministic-v1",
-            is_simulated=True,
+            is_simulated=anomaly.is_simulated,
             generated_at=now_str,
         )

@@ -39,7 +39,7 @@ jobs:
 
       - name: Run Backend Tests
         run: |
-          python -m pytest -v tests/test_backend.py
+          python -m pytest -v tests
 
       - name: Run Pattern Tests
         run: |

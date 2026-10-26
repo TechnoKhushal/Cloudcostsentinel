@@ -70,9 +70,11 @@ class Settings(BaseModel):
         ).lower()
         in ("true", "1", "yes")
     )
-    AUTH_ISSUER: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_ISSUER"))
-    AUTH_AUDIENCE: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_AUDIENCE"))
-    AUTH_JWKS_URL: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_JWKS_URL"))
+    AUTH_ISSUER: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_ISSUER") or (f"{os.getenv('SUPABASE_URL').rstrip('/')}/auth/v1" if os.getenv("SUPABASE_URL") else None))
+    AUTH_AUDIENCE: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_AUDIENCE") or ("authenticated" if os.getenv("SUPABASE_URL") else None))
+    AUTH_JWKS_URL: Optional[str] = Field(default_factory=lambda: os.getenv("AUTH_JWKS_URL") or (f"{os.getenv('SUPABASE_URL').rstrip('/')}/auth/v1/.well-known/jwks.json" if os.getenv("SUPABASE_URL") else None))
+    SUPABASE_URL: Optional[str] = Field(default_factory=lambda: os.getenv("SUPABASE_URL"))
+    SUPABASE_ANON_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY"))
     # Strands Decider 2B Settings
     DECIDER_PROVIDER: str = Field(default_factory=lambda: os.getenv("DECIDER_PROVIDER", "mock"))
     # Default to port 8080 (the external strands-decider serve instance) to avoid self-referential ambiguity
@@ -140,17 +142,18 @@ class Settings(BaseModel):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
 
         # 'inprocess' removed — it raises NotImplementedError and must not be allowed.
-        allowed_deciders = {"mock", "http"}
+        allowed_deciders = {"mock", "rules", "http"}
         if self.DECIDER_PROVIDER not in allowed_deciders:
             raise ValueError(f"Invalid DECIDER_PROVIDER '{self.DECIDER_PROVIDER}'. Allowed: {sorted(allowed_deciders)}")
 
         if bool(self.OPENROUTER_API_KEY) != bool(self.OPENROUTER_MODEL):
             raise ValueError("Set both OPENROUTER_API_KEY and OPENROUTER_MODEL to enable AI reports, or leave both unset.")
+        if self.OPENROUTER_MODEL and self.OPENROUTER_MODEL != "openrouter/free" and not self.OPENROUTER_MODEL.endswith(":free"):
+            raise ValueError("OPENROUTER_MODEL must be openrouter/free or a model variant ending in :free; paid models are blocked.")
 
         if self.DATABASE_URL:
             raise ValueError(
-                "DATABASE_URL is not supported by the current SQLite repository. "
-                "Remove it or implement PostgreSQL support before configuring it."
+                "DATABASE_URL is not used. Configure SUPABASE_URL and SUPABASE_ANON_KEY for production persistence."
             )
 
         if self.ENVIRONMENT == "production":
@@ -171,36 +174,42 @@ class Settings(BaseModel):
             if self.AUTH_ENABLED:
                 # Validate full OIDC configuration when auth is enabled
                 missing = []
-                if not self.AUTH_JWKS_URL:
-                    missing.append("AUTH_JWKS_URL")
-                if not self.AUTH_ISSUER:
-                    missing.append("AUTH_ISSUER")
+                if not (self.AUTH_JWKS_URL or self.SUPABASE_URL):
+                    missing.append("AUTH_JWKS_URL (or SUPABASE_URL)")
+                if not (self.AUTH_ISSUER or self.SUPABASE_URL):
+                    missing.append("AUTH_ISSUER (or SUPABASE_URL)")
                 if not self.AUTH_AUDIENCE:
-                    missing.append("AUTH_AUDIENCE")
+                    missing.append("AUTH_AUDIENCE (use authenticated for Supabase Auth)")
                 if missing:
                     raise ValueError(
                         f"AUTH_ENABLED=true requires these environment variables to be set: {missing}"
                     )
-                issuer = urlsplit(self.AUTH_ISSUER or "")
-                jwks = urlsplit(self.AUTH_JWKS_URL or "")
+                issuer = urlsplit(self.AUTH_ISSUER or f"{self.SUPABASE_URL}/auth/v1")
+                jwks = urlsplit(self.AUTH_JWKS_URL or f"{self.SUPABASE_URL}/auth/v1/.well-known/jwks.json")
                 if issuer.scheme != "https" or not issuer.netloc or jwks.scheme != "https" or not jwks.netloc:
                     raise ValueError("Production OIDC issuer and JWKS URL must be valid HTTPS URLs.")
 
+            missing_supabase = [name for name, value in (
+                ("SUPABASE_URL", self.SUPABASE_URL), ("SUPABASE_ANON_KEY", self.SUPABASE_ANON_KEY)
+            ) if not value]
+            if missing_supabase:
+                raise ValueError(f"Production startup requires Supabase settings: {missing_supabase}")
+            supabase_url = urlsplit(self.SUPABASE_URL or "")
+            if supabase_url.scheme != "https" or not supabase_url.netloc or supabase_url.path:
+                raise ValueError("SUPABASE_URL must be an HTTPS project origin with no path.")
+
             if self.DECIDER_PROVIDER == "mock":
                 raise ValueError(
-                    "Production startup refused: mock decision providers are prohibited; use ENVIRONMENT=demo for simulated providers."
+                    "Production startup refused: simulated mock decisions are prohibited; use rules for deterministic local policy or http for a verified model service."
                 )
 
-            database_path = Path(self.DATABASE_PATH).expanduser()
-            temporary_dir = Path(tempfile.gettempdir()).resolve()
-            try:
-                is_temporary = database_path.resolve().is_relative_to(temporary_dir)
-            except OSError:
-                is_temporary = False
-            if self.DATABASE_PATH == "backend/data/sentinel.db" or not database_path.is_absolute() or is_temporary:
+            if self.NOTIFICATION_PROVIDER == "mock":
+                raise ValueError("Production startup prohibits simulated notifications; use disabled or a verified provider.")
+
+            if self.AWS_COST_EXPLORER_ENABLED:
                 raise ValueError(
-                    "Production startup requires DATABASE_PATH to be an absolute path outside temporary storage "
-                    "on a verified persistent disk."
+                    "Production AWS Cost Explorer is blocked until cloud credentials are scoped to an organization; "
+                    "shared backend credentials would expose one billing account to every tenant."
                 )
 
         if self.ENVIRONMENT == "demo":

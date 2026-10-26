@@ -177,10 +177,10 @@ class AWSCostExplorerService:
             return anomaly, warning
 
         except (NoCredentialsError, PartialCredentialsError) as cred_err:
-            return None, f"AWS Credentials not configured: {cred_err}"
+            return None, "AWS credentials are unavailable to the backend."
         except ClientError as ce:
             err_code = ce.response.get("Error", {}).get("Code", "ClientError")
-            err_msg = ce.response.get("Error", {}).get("Message", str(ce))
-            return None, f"AWS Cost Explorer Error [{err_code}]: {err_msg}"
+            return None, f"AWS Cost Explorer request failed ({err_code[:80]})."
         except Exception as exc:
-            return None, f"Unexpected error querying AWS Cost Explorer: {str(exc)}"
+            logger.warning("Cost Explorer request failed (%s).", type(exc).__name__)
+            return None, "AWS Cost Explorer is temporarily unavailable."

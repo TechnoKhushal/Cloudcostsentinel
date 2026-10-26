@@ -4,9 +4,11 @@ import type { InvestigationReport } from "../types";
 
 interface InvestigationReportPanelProps {
   report: InvestigationReport | null;
+  canDownload?: boolean;
+  onDownload?: () => void;
 }
 
-export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> = ({ report }) => {
+export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> = ({ report, canDownload = false, onDownload }) => {
   if (!report) return null;
 
   return (
@@ -14,7 +16,7 @@ export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> =
       <div className="panel-header">
         <h2 className="panel-title">
           <Sparkles size={18} color="#a855f7" />
-          <span>{report.is_simulated ? "Grounded Cost Investigation · Offline" : "AI-assisted Cost Investigation"}</span>
+          <span>{report.provider === "openrouter" ? "AI-assisted Cost Investigation" : "Grounded Cost Investigation · Deterministic"}</span>
         </h2>
         <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem" }}>
           <span className="status-pill pill-purple">
@@ -23,6 +25,7 @@ export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> =
           <span className="status-pill">
             {report.model_id}
           </span>
+          {canDownload && <button type="button" className="btn btn-secondary btn-sm" onClick={onDownload} aria-label="Download this report securely">⇩ Download JSON</button>}
         </div>
       </div>
 

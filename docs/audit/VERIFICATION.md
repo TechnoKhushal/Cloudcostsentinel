@@ -1,5 +1,30 @@
 # Verification log
 
+## Supabase integration code update (2026-10-27)
+
+This update adds a production-only Supabase Auth/JWT, user-token PostgREST and private Storage code path, report download endpoint, profile endpoint, and three ordered migrations. The original migration files are unchanged; migration 003 adds the membership role and owner cleanup policy. It also adds a Supabase sign-up/sign-in/recovery gate, Vercel public Supabase configuration, and lazy chart loading. Production startup requires Supabase, authenticated requests, deterministic non-mock decisions and non-mock notifications. Shared AWS Cost Explorer credentials are rejected until per-organization cloud credentials exist.
+
+### Local checks
+
+| Command | Result |
+|---|---|
+| `.tmp/audit-venv/Scripts/python.exe -m compileall -q backend patterns scripts tests` | Passed. |
+| `.tmp/audit-venv/Scripts/python.exe -m pytest -q tests` | 52 passed, including mocked Supabase repository and static migration-structure tests. No real Postgres or RLS behavior is proven. |
+| `.tmp/audit-venv/Scripts/python.exe -m pytest -q patterns/threshold_aware_anomaly_response/test_pattern.py` | 5 passed. |
+| `.tmp/audit-venv/Scripts/python.exe -m pip_audit` | No known vulnerabilities found. |
+| `frontend: npm test` | 20 passed. |
+| `frontend: npm run lint` | Passed. |
+| `frontend: npm run build` | Passed. Main JS 283.89 kB; lazy chart JS 359.27 kB. No 500 kB chunk warning. |
+| `git diff --check` | Passed. |
+
+### Live checks and limits
+
+- Render `/api/health/live`, `/api/health`, and `/api/health/ready` returned HTTP 200. The returned environment is still `demo`, with simulated decisions, offline narrator, and demo database state.
+- Vercel `/` returned HTTP 200 and HTML referencing the previously deployed bundle. This does not establish that the new frontend is deployed.
+- The only local and remote branch is `main`; no Supabase/Render/Vercel dashboard credentials were available. The new migrations were not applied, and deployment revisions/configuration were not verified.
+- Authentication lifecycle, RLS isolation, SQL execution, private Storage authorization, report deletion/retention, multi-user browser flows, organization invitations, production rate limits, per-organization cloud accounts, complete frontend product workflows, and live API persistence remain unverified or unimplemented.
+- Pushing code does not make the public service production-ready. Keep the demo/production distinction visible until the project-backed checks and deployment setup are complete.
+
 Audit/change date: 2026-10-26. All commands below were run locally; they do not prove Render/Vercel deployment or a Supabase project migration.
 
 ## Baseline (before edits)
