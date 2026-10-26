@@ -4,7 +4,7 @@ This mode is an opt-in, shared demonstration using synthetic scenarios, simulate
 
 ## Render backend
 
-Use the repository root (not `backend/`) and branch `codex/repair-vercel-render-connectivity` until its changes are merged. The repository does not contain a `render.yaml`; confirm the Render service dashboard points to that branch and root directory because dashboard settings are not available from this workspace. Use the repository Dockerfile, or configure the native Python service with Python 3.11 (the checked-in `.python-version` matches CI and Docker) and build command `pip install -r requirements.txt`. The API does not import or require the standalone model-serving package; to run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
+Use the repository root (not `backend/`) and branch `main`. The only remote branch currently published is `main`. The repository does not contain a `render.yaml`; confirm the Render service dashboard points to `main` and the repository root because dashboard settings are not available from this workspace. Use the repository Dockerfile, or configure the native Python service with Python 3.11 (the checked-in `.python-version` matches CI and Docker) and build command `pip install -r requirements.txt`. The API does not import or require the standalone model-serving package; to run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
 
 ```sh
 uvicorn backend.main:app --host 0.0.0.0 --port "$PORT"

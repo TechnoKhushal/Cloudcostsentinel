@@ -14,6 +14,11 @@ cryptography>=42.0.0
 
 # Strands framework adapter; the heavyweight standalone model runtime is optional.
 strands-agents>=1.62.0
+# strands-agents currently permits MCP 2.1.x, which pip-audit flags (CVE-2026-59951).
+# MCP 1.30.0 is the patched release compatible with strands-agents' declared range.
+mcp>=1.30.0,<2.0.0
+# Keep the Python build/tooling package above current setuptools advisories.
+setuptools>=84.1.0
 
 # The API imports only the pure-Python wire schema. Install its package without
 # its model/training dependencies in Docker, Render, and CI (see those commands).

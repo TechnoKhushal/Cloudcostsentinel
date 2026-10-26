@@ -82,7 +82,7 @@ The pattern is packaged with:
 
 ### Prerequisites
 - Python 3.11+
-- Node.js 20+ and npm
+- Node.js 24 and npm (matches the checked-in CI and Docker build toolchain)
 
 ### 1. Clone & Set Up Environment
 ```bash

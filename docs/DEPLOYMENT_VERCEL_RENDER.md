@@ -28,7 +28,7 @@ If the app is intended to be public, review Vercel Deployment Protection for the
 
 ## Render backend settings for the simulated demo
 
-Use repository root directory and branch `codex/repair-vercel-render-connectivity` until the repair is merged. There is no checked-in `render.yaml`, so verify these settings in the Render dashboard. For a Docker deployment, use the repository Dockerfile. For a native Python service, use Python 3.11 (the repository `.python-version` pins Render to the same runtime as CI and Docker), set the build command to `pip install -r requirements.txt`, and use this start command:
+Use repository root directory and branch `main`. The only remote branch currently published is `main`. There is no checked-in `render.yaml`, so verify these settings in the Render dashboard. For a Docker deployment, use the repository Dockerfile. For a native Python service, use Python 3.11 (the repository `.python-version` pins Render to the same runtime as CI and Docker), set the build command to `pip install -r requirements.txt`, and use this start command:
 
 ```text
 uvicorn backend.main:app --host 0.0.0.0 --port $PORT

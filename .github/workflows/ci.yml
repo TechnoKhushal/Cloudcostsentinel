@@ -28,6 +28,11 @@ jobs:
           # Keep it test-only and skip its unrelated PyTorch/model-serving dependencies.
           pip install --no-deps "strands-decider==0.2.0"
 
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt
+
       - name: Verify Python Compilation
         run: |
           python -m compileall -q backend patterns scripts tests
