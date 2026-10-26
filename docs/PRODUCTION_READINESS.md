@@ -13,6 +13,7 @@ Current source revision audited: `43df07d23ea2c5262d34079926454d2db59b78c2` befo
 - Vercel and Render dashboard credentials are not connected to this workspace. The Vercel and Render deployed commit IDs, Render service root/branch settings, and Vercel project settings cannot be verified from public health endpoints. The HTTP responses show application state, not a trustworthy source revision.
 - The repository has no `render.yaml`; Render configuration is dashboard-managed. Set its branch to `main`, root directory to repository root, and start command to `uvicorn backend.main:app --host 0.0.0.0 --port $PORT` (or use the checked-in Dockerfile).
 - Vercel should use root `frontend`, install `npm ci`, build `npm run build`, output `dist`, and deploy the production branch `main`.
+- `frontend/vercel.json` sets security headers including a CSP allowing same-origin scripts/assets and the Render API origin. Any change to `VITE_API_BASE_URL` must be reflected in the CSP `connect-src` directive, then redeployed and checked in a browser.
 
 ## Exact environment configuration for the current free demo
 
