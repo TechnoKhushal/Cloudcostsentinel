@@ -12,10 +12,10 @@ export const BedrockReportPanel: React.FC<BedrockReportPanelProps> = ({ report }
   return (
     <div className="panel-card">
       <div className="panel-header">
-        <div className="panel-title">
+        <h2 className="panel-title">
           <Sparkles size={18} color="#a855f7" />
           <span>{report.is_simulated ? "Simulated Cost Investigation" : "Amazon Bedrock — Grounded Cost Investigation"}</span>
-        </div>
+        </h2>
         <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem" }}>
           <span className="status-pill pill-purple">
             {report.provider}
@@ -68,7 +68,7 @@ export const BedrockReportPanel: React.FC<BedrockReportPanelProps> = ({ report }
       </div>
 
       {/* Investigation Areas & Recommendations in 2 columns */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginTop: "1rem" }}>
+      <div className="report-columns">
         <div className="report-section">
           <div className="report-section-title">
             <AlertCircle size={15} />

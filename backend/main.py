@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import sqlite3
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
@@ -11,15 +15,6 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, s
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-
-from strands_decider.schema import (
-    ChoiceAnswer,
-    ChoiceQuestion,
-    SystemOneRequest,
-    SystemOneResponse,
-    Usage,
-    derive_confidence,
-)
 
 from .auth import AuthenticatedPrincipal, require_reviewer, require_viewer
 from .config import settings
@@ -30,6 +25,7 @@ from .models.decision import DeciderResponseTrace
 from .models.report import BedrockReport
 from .services.aws_cost_explorer import AWSCostExplorerService
 from .services.cost_analyzer import CostScenarioRegistry
+from .services.confidence import mock_confidence
 from .services.decider_client import DeciderClient
 from .services.strands_agent import StrandsBedrockNarrator
 
@@ -44,6 +40,23 @@ logger = logging.getLogger("cloudcost_sentinel.app")
 async def lifespan(app: FastAPI):
     """Validate startup settings strictly to prevent unsafe production configurations."""
     settings.validate_startup()
+    try:
+        db.initialize()
+    except (OSError, sqlite3.Error) as exc:
+        database_dir = Path(settings.DATABASE_PATH).expanduser().resolve().parent
+        logger.exception("SQLite initialization failed for directory %s", database_dir)
+        raise RuntimeError(
+            f"SQLite could not initialize directory '{database_dir}': {exc}. Confirm it exists and is writable. "
+            "For an ephemeral Render demo without a mounted disk, set DATABASE_PATH=/tmp/cloudcost-sentinel.db; "
+            "for persistent data, attach a writable disk and set DATABASE_PATH to its mount."
+        ) from None
+    db_file = Path(settings.DATABASE_PATH).expanduser().resolve()
+    temporary_dir = Path(tempfile.gettempdir()).resolve()
+    if settings.ENVIRONMENT == "demo" and db_file.is_relative_to(temporary_dir):
+        logger.warning(
+            "Demo SQLite database uses ephemeral temporary storage at %s; records can disappear on restart or redeploy.",
+            db_file,
+        )
     logger.info(
         "CloudCost Sentinel starting in environment='%s', auth_enabled=%s, decider_provider='%s', bedrock_provider='%s'",
         settings.ENVIRONMENT,
@@ -61,6 +74,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.get("/", tags=["Health"], include_in_schema=False)
+async def get_root() -> Dict[str, str]:
+    """Give operators a harmless pointer to the liveness endpoint at the service root."""
+    return {"service": "CloudCost Sentinel API", "health": "/api/health/live"}
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -70,7 +89,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Services & Storage
+# Services & Storage. Repository construction is side-effect-free; schema/directory
+# initialization occurs in lifespan after environment validation.
 db = DatabaseRepository(settings.DATABASE_PATH)
 decider_client = DeciderClient()
 bedrock_narrator = StrandsBedrockNarrator()
@@ -397,9 +417,9 @@ async def record_approval_decision(
 if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
     @app.post("/v1/systemone", tags=["Strands Decider System One Spec"])
     async def strands_decider_systemone_endpoint(
-        req: SystemOneRequest,
+        req: Dict[str, Any],
         response: Response,
-    ) -> SystemOneResponse:
+    ) -> Dict[str, Any]:
         """Reference server implementing the official Strands Decider wire protocol.
 
         Provides a test-fixture for protocol validation and local tests.
@@ -407,11 +427,16 @@ if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
         Only active when ENABLE_TEST_FIXTURE_ENDPOINT=true (never in production).
         """
         response.headers["X-Sentinel-Test-Fixture"] = "true"
+        questions = req.get("questions")
+        if not isinstance(questions, dict) or not isinstance(req.get("state"), str):
+            raise HTTPException(status_code=422, detail="Request must include string state and questions object.")
         answers: Dict[str, Any] = {}
-        for q_name, question in req.questions.items():
-            if isinstance(question, ChoiceQuestion):
-                opts = list(question.criteria.keys())
-                state_text = str(req.state).lower()
+        for q_name, question in questions.items():
+            if isinstance(question, dict) and question.get("type") == "choice" and isinstance(question.get("criteria"), dict):
+                opts = list(question["criteria"].keys())
+                if not opts:
+                    raise HTTPException(status_code=422, detail="Choice question criteria must not be empty.")
+                state_text = str(req["state"]).lower()
                 if "critical" in state_text or "spike" in state_text or "unknown" in state_text or "+3" in state_text:
                     choice = "request_approval" if "request_approval" in opts else opts[0]
                     probs = {opt: (0.85 if opt == choice else (0.15 / max(1, len(opts) - 1))) for opt in opts}
@@ -422,23 +447,24 @@ if settings.ENABLE_TEST_FIXTURE_ENDPOINT:
                     choice = "monitor" if "monitor" in opts else opts[0]
                     probs = {opt: (0.88 if opt == choice else (0.12 / max(1, len(opts) - 1))) for opt in opts}
 
-                conf = derive_confidence(list(probs.values()))
-                answers[q_name] = ChoiceAnswer(
-                    choice=choice,
-                    probabilities=probs,
-                    confidence=conf,
-                )
+                conf = mock_confidence(probs.values())
+                answers[q_name] = {
+                    "type": "choice",
+                    "choice": choice,
+                    "probabilities": probs,
+                    "confidence": conf,
+                }
             else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Question type '{question.type}' not supported in this endpoint.",
+                    detail=f"Question type '{question.get('type') if isinstance(question, dict) else 'unknown'}' not supported in this endpoint.",
                 )
 
-        return SystemOneResponse(
-            model="StrandsAgents/strands-decider-2B-hobson-v19",
-            answers=answers,
-            usage=Usage(input_tokens=180, output_tokens=0),
-        )
+        return {
+            "model": str(req.get("model", "StrandsAgents/strands-decider-2B-hobson-v19")),
+            "answers": answers,
+            "usage": {"input_tokens": 180, "output_tokens": 0},
+        }
 else:
     # Register a stub that returns 404 so tests targeting the disabled endpoint get a clear error.
     @app.post("/v1/systemone", include_in_schema=False)
@@ -455,7 +481,6 @@ else:
 # ------------------------------------------------------------------------------
 # Static Frontend Serving (Single-Container Production & Demo Builds)
 # ------------------------------------------------------------------------------
-import os
 from fastapi.staticfiles import StaticFiles
 
 frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")

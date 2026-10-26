@@ -1,62 +1,33 @@
-import React from "react";
-import { ShieldAlert, Cpu, Sparkles, Cloud, Lock } from "lucide-react";
+import { Cloud, Cpu, Lock, ShieldAlert, Sparkles } from "lucide-react";
 import type { HealthInfo } from "../types";
 
 interface HeaderProps {
   health: HealthInfo | null;
-  isSimulated: boolean;
+  isSimulated: boolean | null;
 }
 
-export const Header: React.FC<HeaderProps> = ({ health, isSimulated }) => {
-  return (
-    <header className="app-header">
-      <div className="brand-section">
-        <div className="brand-icon-wrapper">
-          <ShieldAlert size={26} color="#ffffff" />
-        </div>
-        <div>
-          <div className="brand-title">CloudCost Sentinel</div>
-          <div className="brand-subtitle">
-            Cloud Spend Decision Support & FinOps Review
-          </div>
-        </div>
-      </div>
+function providerLabel(provider: string | undefined, state: string | undefined): string {
+  if (!provider || !state) return "Checking";
+  if (state === "simulated" || provider === "mock") return "Simulated";
+  if (state === "disabled" || provider === "disabled") return "Off";
+  if (state === "connected") return "Connected";
+  if (state === "configured_unverified") return "Configured · unverified";
+  return state.replaceAll("_", " ");
+}
 
-      <div className="header-status-pills">
-        {/* Mode pill */}
-        <span className={`status-pill ${isSimulated ? "pill-amber" : "pill-emerald"}`}>
-          <span className="dot">●</span>
-          {isSimulated ? "SIMULATED COST DATA" : "LIVE COST DATA"}
-        </span>
-
-        <span className={`status-pill ${health?.status === "ready" || health?.status === "healthy" || health?.status === "simulated" ? "pill-emerald" : "pill-amber"}`}>
-          Backend: {health?.environment === "demo" ? "SIMULATED DEMO" : health?.status ?? "OFFLINE"}
-        </span>
-
-        {/* Decider Model Pill */}
-        <span className={`status-pill ${health?.providers.decider.provider === "http" ? "pill-cyan" : "pill-amber"}`}>
-          <Cpu size={14} />
-          Decider: {health?.providers.decider.provider === "mock" ? "Simulated" : health?.providers.decider.state === "connected" ? "Connected" : "Configured, unverified"}
-        </span>
-
-        {/* Bedrock Model Pill */}
-        <span className={`status-pill ${health?.providers.bedrock.provider === "bedrock" ? "pill-purple" : "pill-amber"}`}>
-          <Sparkles size={14} />
-          Bedrock: {health?.providers.bedrock.provider === "mock" ? "Simulated narrator" : health?.providers.bedrock.state === "connected" ? "Connected" : "Configured, unverified"}
-        </span>
-
-        {/* AWS Cost Explorer Status */}
-        <span className="status-pill">
-          <Cloud size={14} />
-          Cost Explorer: {health?.providers.cost_explorer.enabled ? "Configured, unverified" : "Off (Safe)"}
-        </span>
-
-        {/* Safety Lock Pill */}
-        <span className="status-pill">
-          <Lock size={14} />
-          Zero Mutation Sandbox
-        </span>
-      </div>
-    </header>
-  );
-};
+export const Header = ({ health, isSimulated }: HeaderProps) => (
+  <header className="app-header">
+    <a className="brand-section" href="#page-title" aria-label="CloudCost Sentinel home">
+      <span className="brand-icon-wrapper"><ShieldAlert size={24} aria-hidden="true" /></span>
+      <span className="brand-copy"><span className="brand-title">CloudCost Sentinel</span><span className="brand-subtitle">Cloud spend decision support</span></span>
+    </a>
+    <div className="header-status-pills" aria-label="Backend and provider status">
+      <span className={`status-pill ${health?.environment === "demo" ? "pill-amber" : ""}`}>{health?.environment ? `Mode · ${health.environment}` : "Mode · checking"}</span>
+      <span className={`status-pill ${isSimulated === null ? "" : isSimulated ? "pill-amber" : "pill-emerald"}`}>{isSimulated === null ? "Cost data · not analyzed" : isSimulated ? "Cost data · simulated" : "Cost data · non-simulated"}</span>
+      <span className="status-pill"><Cpu size={14} aria-hidden="true" />Decider · {providerLabel(health?.providers.decider.provider, health?.providers.decider.state)}</span>
+      <span className="status-pill"><Sparkles size={14} aria-hidden="true" />Narrator · {providerLabel(health?.providers.bedrock.provider, health?.providers.bedrock.state)}</span>
+      <span className="status-pill"><Cloud size={14} aria-hidden="true" />Cost Explorer · {health ? health.providers.cost_explorer.enabled ? "Enabled · unverified" : "Off" : "Checking"}</span>
+      <span className="status-pill"><Lock size={14} aria-hidden="true" />No automatic cloud changes</span>
+    </div>
+  </header>
+);

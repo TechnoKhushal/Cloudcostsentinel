@@ -4,7 +4,7 @@ This mode is an opt-in, shared demonstration using synthetic scenarios, simulate
 
 ## Render backend
 
-Use the repository root and the Dockerfile, or configure the native Python service with Python 3.11, `pip install -r requirements.txt`, and:
+Use the repository root (not `backend/`) and branch `codex/repair-vercel-render-connectivity` until its changes are merged. The repository does not contain a `render.yaml`; confirm the Render service dashboard points to that branch and root directory because dashboard settings are not available from this workspace. Use the repository Dockerfile, or configure the native Python service with Python 3.11 (the checked-in `.python-version` matches CI and Docker) and build command `pip install -r requirements.txt`. The API does not import or require the standalone model-serving package; to run a separate local model server, install `requirements-decider-model.txt` in that server's environment. Set the start command to:
 
 ```sh
 uvicorn backend.main:app --host 0.0.0.0 --port "$PORT"
@@ -21,11 +21,13 @@ AWS_COST_EXPLORER_ENABLED=false
 NOTIFICATION_PROVIDER=disabled
 ENABLE_TEST_FIXTURE_ENDPOINT=false
 HOST=0.0.0.0
-DATABASE_PATH=/var/data/sentinel.db
-CORS_ORIGINS=https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
+DATABASE_PATH=/tmp/cloudcost-sentinel.db
+CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
 ```
 
-Attach a persistent disk mounted at `/var/data`; without it, SQLite data is disposable on redeploy/restart. Do not configure `DATABASE_URL`: the current repository does not implement PostgreSQL and refuses to start in any environment when that unused variable is set. This demo uses synthetic scenario IDs only; the API rejects custom anomaly payloads and Cost Explorer requests.
+Do not add `ALLOW_MOCK_IN_PRODUCTION`; the application does not read that legacy variable. Production startup already rejects mock providers.
+
+The current Render demo has no verified persistent disk, so use `/tmp/cloudcost-sentinel.db`. This is writable demo storage, not durable: approvals and other records may disappear on restart/redeploy. The code also selects this path by default for Render demo mode when `DATABASE_PATH` is unset. An explicit path such as `/var/data/sentinel.db` is never silently replaced; attach and verify a writable persistent disk before configuring it. Do not configure `DATABASE_URL`: PostgreSQL is not implemented and startup rejects it. This demo uses synthetic scenario IDs only; the API rejects custom anomaly payloads and Cost Explorer requests.
 
 ## Vercel frontend
 
@@ -40,7 +42,14 @@ curl -i https://cloudcostsentinel.onrender.com/api/health
 curl -i https://cloudcostsentinel.onrender.com/api/demo/scenarios
 ```
 
-The live probe should return 200. In `ENVIRONMENT=demo`, readiness should return 200 with database `connected` and providers `simulated`. Confirm browser analysis responses label the anomaly, Decider provider, and report as simulated. Restart/redeploy and confirm the persistent disk retains approvals. A public demo shares approval state between visitors and is not an authenticated tenant environment.
+For automated checks, run:
+
+```sh
+python scripts/smoke_test_deployment.py https://cloudcostsentinel.onrender.com \
+  --frontend-origin https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app
+```
+
+The live probe should return 200. In `ENVIRONMENT=demo`, readiness should return 200 with database `connected` and providers `simulated`. Confirm browser analysis responses label the anomaly, Decider provider, and report as simulated. The current `/tmp` database can lose records on restart/redeploy. A public demo shares approval state between visitors and is not an authenticated tenant environment.
 
 ## Authenticated production
 

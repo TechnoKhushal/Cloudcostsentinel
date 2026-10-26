@@ -12,9 +12,11 @@ cryptography>=42.0.0
 
 # Persistence currently uses Python's SQLite driver. PostgreSQL is not implemented.
 
-# Strands Framework
+# Strands framework adapter; the heavyweight standalone model runtime is optional.
 strands-agents>=1.62.0
-strands-decider>=0.2.0
+
+# The API imports only the pure-Python wire schema. Install its package without
+# its model/training dependencies in Docker, Render, and CI (see those commands).
 
 # Testing & Quality
 pytest>=8.0.0
