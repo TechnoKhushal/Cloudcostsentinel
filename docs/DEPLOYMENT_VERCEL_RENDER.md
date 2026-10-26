@@ -10,6 +10,7 @@ No additional third-party API was introduced by this repair. The default demo us
 - Render liveness, health, and readiness returned HTTP 200. Health reported `environment=demo`, `auth.mode=explicit_demo`, simulated Decider and Bedrock providers, and disabled AWS Cost Explorer. Readiness separately reported its database as connected.
 - Render returned HTTP 200 to POST preflight from both the stable production alias and the generated Vercel project URL, with the exact requesting origin in `Access-Control-Allow-Origin` and `authorization,content-type` allowed.
 - The live Vercel page rendered its dashboard data and the frontend bundle referenced the Render API origin. Vercel/Render dashboard settings, deployed commit SHAs, and provider logs are not accessible from this workspace, so the active deployment revisions cannot be confirmed here.
+- A synthetic `stable_baseline` POST returned a simulated `monitor` decision, a simulated report, and no approval item. The branch's Vercel preview reported Ready but returns the Vercel login page to signed-out visitors, so the preview UI could not be inspected publicly.
 
 ## Vercel frontend settings
 
@@ -80,4 +81,4 @@ Then verify `GET /api/demo/scenarios`, `GET /api/approvals`, `GET /api/decisions
 
 ## Verification status
 
-GitHub Actions [run 40354911056](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40354911056) passed both backend and frontend jobs for the repair. The backend suite passed 44 tests, the pattern suite passed 5 tests, and frontend API tests passed 15 tests in local clean-dependency runs. The two backend test defects were a Render configuration fixture missing required `HOST=0.0.0.0` and a missing `cost_explorer` test import. Live health, readiness, scenarios, decisions, approvals, and stable-origin POST preflight were also verified on 2026-10-26.
+GitHub Actions [run 40361777285](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40361777285) passed both backend and frontend jobs for the feature branch. The backend suite passed 44 tests, the pattern suite passed 5 tests, and frontend API/export/approval-queue tests passed 20 tests. The two backend test defects were a Render configuration fixture missing required `HOST=0.0.0.0` and a missing `cost_explorer` test import. Live health, readiness, scenarios, decisions, approvals, stable-origin POST preflight, and a simulated analysis were also verified on 2026-10-26.
