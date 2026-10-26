@@ -9,6 +9,7 @@ import { BedrockReportPanel } from "./components/BedrockReportPanel";
 import { ApprovalsFeed } from "./components/ApprovalsFeed";
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, BedrockReport, HealthInfo, Scenario } from "./types";
 import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, submitApprovalDecision } from "./api";
+import { buildAnalysisCsv, buildExecutiveBrief, downloadAnalysisCsv } from "./analysisExport";
 
 type ResourceKey = "health" | "scenarios" | "decisions" | "approvals";
 type ResourceErrors = Record<ResourceKey, ApiError | Error | null>;
@@ -139,6 +140,22 @@ export const App = () => {
     if (analysisError && scenarios.length > 0) void executeAnalysis(selectedScenarioId);
   };
 
+  const handleExport = () => {
+    if (!anomaly || !decision || !report) return;
+    downloadAnalysisCsv(buildAnalysisCsv(anomaly, decision, report), anomaly.scenario_id);
+    notify("Analysis CSV downloaded.");
+  };
+
+  const handleCopyBrief = async () => {
+    if (!anomaly || !decision || !report) return;
+    try {
+      await navigator.clipboard.writeText(buildExecutiveBrief(anomaly, decision, report));
+      notify("Executive brief copied to clipboard.");
+    } catch {
+      notify("Clipboard access is unavailable. Use the CSV export instead.", true);
+    }
+  };
+
   const handleScenario = (id: string) => {
     selectedIdRef.current = id;
     setSelectedScenarioId(id);
@@ -188,6 +205,10 @@ export const App = () => {
             {refreshing ? "Checking…" : "Check connection"}
           </button>
           <span className="last-checked">{lastChecked ? `Checked ${lastChecked.toLocaleTimeString()}` : "Not checked yet"}</span>
+          {anomaly && decision && report && <>
+            <button type="button" className="btn btn-secondary" onClick={handleExport} aria-label="Download current analysis as CSV"><span aria-hidden="true">↓</span>Export CSV</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void handleCopyBrief()} aria-label="Copy executive brief"><span aria-hidden="true">▣</span>Copy brief</button>
+          </>}
         </div>
       </section>
 

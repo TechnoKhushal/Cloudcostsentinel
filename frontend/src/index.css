@@ -608,6 +608,15 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-rejected { color: #d4dce5; background: rgba(115, 133, 153, .18); }
 .approval-savings { color: #9be3ee; font-size: .73rem; }
 .approval-actions { display: flex; gap: .4rem; }
+.approval-tools { display: grid; gap: .7rem; margin: 0 0 .85rem; }
+.approval-search { display: flex; align-items: center; gap: .55rem; min-height: 40px; padding: 0 .7rem; border: 1px solid rgba(120, 148, 171, .24); border-radius: 8px; background: var(--bg-panel); color: var(--text-muted); }
+.approval-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: .78rem; }
+.approval-search:focus-within { border-color: var(--accent-cyan); box-shadow: 0 0 0 2px rgba(6, 182, 212, .18); }
+.approval-filters { display: flex; flex-wrap: wrap; gap: .4rem; }
+.filter-chip { border: 1px solid rgba(120, 148, 171, .22); border-radius: 999px; padding: .3rem .6rem; background: rgba(15, 25, 39, .8); color: var(--text-secondary); cursor: pointer; font: inherit; font-size: .7rem; }
+.filter-chip span { margin-left: .2rem; color: var(--text-muted); }
+.filter-chip.active { border-color: rgba(76, 201, 219, .5); color: #b5f1f6; background: rgba(6, 182, 212, .12); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .btn-approve { background: #187b5b; }
 .btn-reject { background: #963b4b; }
 .trace-summary { width: 100%; border: 0; background: transparent; text-align: left; }

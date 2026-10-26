@@ -8,8 +8,8 @@ No additional third-party API was introduced by this repair. The default demo us
 
 - The stable frontend URL `https://cloudcostsentinel.vercel.app` returned HTTP 200 and served the CloudCost Sentinel HTML publicly.
 - Render liveness, health, and readiness returned HTTP 200. Health reported `environment=demo`, `auth.mode=explicit_demo`, simulated Decider and Bedrock providers, and disabled AWS Cost Explorer. Readiness separately reported its database as connected.
-- Render accepted CORS preflight from the configured Vercel project URL `https://cloudcostsentinel-gaalb94rn-technokhushals-projects.vercel.app`, but returned HTTP 400 for the stable production alias `https://cloudcostsentinel.vercel.app`. Add both exact origins to Render's `CORS_ORIGINS` as shown below, then redeploy/restart the service.
-- Render/Vercel dashboard settings, deployed commit SHAs, and provider logs are not accessible from this workspace. The live frontend currently serves HTML, but its deployment SHA and build-time API URL cannot be verified here.
+- Render returned HTTP 200 to POST preflight from both the stable production alias and the generated Vercel project URL, with the exact requesting origin in `Access-Control-Allow-Origin` and `authorization,content-type` allowed.
+- The live Vercel page rendered its dashboard data and the frontend bundle referenced the Render API origin. Vercel/Render dashboard settings, deployed commit SHAs, and provider logs are not accessible from this workspace, so the active deployment revisions cannot be confirmed here.
 
 ## Vercel frontend settings
 
@@ -80,4 +80,4 @@ Then verify `GET /api/demo/scenarios`, `GET /api/approvals`, `GET /api/decisions
 
 ## Verification status
 
-GitHub Actions [run 40354434812](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40354434812) passed both backend and frontend jobs for the repair. The backend suite passed 44 tests, the pattern suite passed 5 tests, and frontend API tests passed 15 tests in local clean-dependency runs. The two backend test defects were a Render configuration fixture missing required `HOST=0.0.0.0` and a missing `cost_explorer` test import. The stable Vercel alias still needs to be added to Render's allowlist; rerun the live CORS check after changing `CORS_ORIGINS`.
+GitHub Actions [run 40354911056](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/40354911056) passed both backend and frontend jobs for the repair. The backend suite passed 44 tests, the pattern suite passed 5 tests, and frontend API tests passed 15 tests in local clean-dependency runs. The two backend test defects were a Render configuration fixture missing required `HOST=0.0.0.0` and a missing `cost_explorer` test import. Live health, readiness, scenarios, decisions, approvals, and stable-origin POST preflight were also verified on 2026-10-26.
