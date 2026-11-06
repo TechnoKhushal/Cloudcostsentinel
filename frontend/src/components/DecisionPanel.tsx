@@ -59,7 +59,7 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Calibrated Confidence</div>
-            <div style={{ fontSize: "1.35rem", fontWeight: 700, color: "#fff" }}>
+            <div style={{ fontSize: "1.35rem", fontWeight: 700, color: "#20231f" }}>
               {(decision.confidence * 100).toFixed(1)}%
             </div>
           </div>
@@ -91,7 +91,7 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
         {/* Executed Action Routing Details */}
         <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginTop: "0.5rem" }}>
           <strong>Downstream Execution: </strong>
-          <span style={{ fontFamily: "var(--font-mono)", color: "#93c5fd" }}>
+          <span style={{ fontFamily: "var(--font-mono)", color: "#4b6700" }}>
             {decision.executed_action}
           </span>
         </div>
@@ -109,7 +109,7 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
               <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "capitalize" }}>
                 {opt.replace("_", " ")}
               </div>
-              <div style={{ fontSize: "0.95rem", fontWeight: 700, color: opt === decision.action ? "#38bdf8" : "#cbd5e1" }}>
+              <div style={{ fontSize: "0.95rem", fontWeight: 700, color: opt === decision.action ? "#4b6700" : "#64706a" }}>
                 {(prob * 100).toFixed(1)}%
               </div>
             </div>
@@ -125,13 +125,13 @@ export const DecisionPanel: React.FC<DecisionPanelProps> = ({ decision }) => {
         </button>
         {showTrace && (
           <div className="trace-content">
-            <div style={{ color: "#38bdf8", marginBottom: "0.35rem" }}>// 1. Exact Typed ChoiceQuestion Spec</div>
+            <div style={{ color: "#4b6700", marginBottom: "0.35rem" }}>// 1. Exact Typed ChoiceQuestion Spec</div>
             {JSON.stringify(decision.question, null, 2)}
 
-            <div style={{ color: "#38bdf8", margin: "0.75rem 0 0.35rem" }}>// 2. Compact Normalized Input State Sent to Decider</div>
+            <div style={{ color: "#4b6700", margin: "0.75rem 0 0.35rem" }}>// 2. Compact Normalized Input State Sent to Decider</div>
             {decision.normalized_state}
 
-            <div style={{ color: "#38bdf8", margin: "0.75rem 0 0.35rem" }}>// 3. Execution Trace Metadata</div>
+            <div style={{ color: "#4b6700", margin: "0.75rem 0 0.35rem" }}>// 3. Execution Trace Metadata</div>
             {JSON.stringify(
               {
                 decision_id: decision.decision_id,

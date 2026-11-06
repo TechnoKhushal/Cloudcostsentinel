@@ -15,7 +15,7 @@ export const InvestigationReportPanel: React.FC<InvestigationReportPanelProps> =
     <div className="panel-card">
       <div className="panel-header">
         <h2 className="panel-title">
-          <Sparkles size={18} color="#a855f7" />
+          <Sparkles size={18} color="#4b6700" />
           <span>{report.provider === "openrouter" ? "AI-assisted Cost Investigation" : "Grounded Cost Investigation · Deterministic"}</span>
         </h2>
         <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem" }}>

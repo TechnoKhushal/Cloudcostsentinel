@@ -138,6 +138,36 @@ export async function fetchHealth(signal?: AbortSignal, environment: BuildEnviro
   return value as unknown as HealthInfo;
 }
 
+export interface AccountProfile {
+  user_id: string;
+  display_name: string | null;
+  organization_id: string | null;
+  role: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export async function fetchAccountProfile(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<AccountProfile> {
+  const value: unknown = await requestJson("/api/account/profile", { signal }, "Loading account profile", environment);
+  if (!isObject(value) || typeof value.user_id !== "string" || !(value.display_name === null || typeof value.display_name === "string")
+    || !(value.organization_id === null || typeof value.organization_id === "string") || typeof value.role !== "string") {
+    throw new ApiError("The profile endpoint returned an unexpected response shape.", { endpoint: "/api/account/profile" });
+  }
+  return value as unknown as AccountProfile;
+}
+
+export async function updateAccountProfile(displayName: string, signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<AccountProfile> {
+  const value: unknown = await requestJson("/api/account/profile", {
+    method: "PUT",
+    signal,
+    body: JSON.stringify({ display_name: displayName.trim() || null }),
+  }, "Saving account profile", environment);
+  if (!isObject(value) || typeof value.user_id !== "string" || typeof value.role !== "string") {
+    throw new ApiError("The profile endpoint returned an unexpected response shape.", { endpoint: "/api/account/profile" });
+  }
+  return value as unknown as AccountProfile;
+}
+
 export async function fetchScenarios(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<Scenario[]> {
   const value: unknown = await requestJson("/api/demo/scenarios", { signal }, "Loading scenarios", environment);
   return expectArray(value, "/api/demo/scenarios", isScenario);

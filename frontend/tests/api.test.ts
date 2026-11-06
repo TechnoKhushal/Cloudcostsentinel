@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { ApiError, apiUrl, fetchApprovals, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision } from "../src/api.ts";
+import { ApiError, apiUrl, fetchAccountProfile, fetchApprovals, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision, updateAccountProfile } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -116,5 +116,23 @@ test("request timeout is reported as a recoverable API error", async () => {
   } finally {
     Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: originalTimeout });
   }
+});
+
+test("account profile reads and updates use the authenticated profile endpoint", async () => {
+  const calls: Array<{ path: string; method: string; body: BodyInit | null | undefined }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    calls.push({ path: url.pathname, method: init?.method ?? "GET", body: init?.body });
+    return new Response(JSON.stringify({ user_id: "user-1", display_name: "FinOps lead", organization_id: "org-1", role: "admin" }), { status: 200 });
+  };
+  const profile = await fetchAccountProfile(undefined, production);
+  assert.equal(profile.user_id, "user-1");
+  await updateAccountProfile("  FinOps lead  ", undefined, production);
+  await updateAccountProfile("   ", undefined, production);
+  assert.deepEqual(calls.map(({ path, method }) => [path, method]), [
+    ["/api/account/profile", "GET"], ["/api/account/profile", "PUT"], ["/api/account/profile", "PUT"],
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[1].body)), { display_name: "FinOps lead" });
+  assert.deepEqual(JSON.parse(String(calls[2].body)), { display_name: null });
 });
 
