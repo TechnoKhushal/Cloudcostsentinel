@@ -59,6 +59,18 @@ def test_spend_metrics_zero_baseline():
     assert metrics.uncertainty_flag is True  # Few baseline points
 
 
+def test_negative_unblended_cost_baseline_is_reported_as_uncertain_not_an_anomaly():
+    metrics = calculate_spend_metrics(
+        [-10.0, -5.0, 100.0], monthly_budget=1000.0,
+        baseline_values=[-10.0, -5.0], month_to_date_spend=85.0,
+    )
+    assert metrics.baseline_spend == -7.5
+    assert metrics.delta_percentage == 0.0
+    assert metrics.month_to_date_spend == 85.0
+    assert metrics.uncertainty_flag is True
+    assert metrics.anomaly_detected is False
+
+
 def test_persistence_streak():
     # Baseline ~ 100 (first 5 points), trailing 3 days exceed 120 (threshold 20%)
     datapoints = [100.0, 100.0, 100.0, 100.0, 100.0, 130.0, 140.0, 160.0]

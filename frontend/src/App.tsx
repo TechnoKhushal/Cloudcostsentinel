@@ -94,7 +94,7 @@ export const App = () => {
       setDecisionHistory((current) => [result.decision, ...current.filter((item) => item.decision_id !== result.decision.decision_id)].slice(0, 30));
       setReport(result.report);
       setCostDataSource(result.cost_data_source);
-      setDataWarning(result.partial_data ? result.data_warnings.join(" ") : null);
+      setDataWarning(result.data_warnings.length > 0 ? result.data_warnings.join(" ") : null);
       if (result.approval) setApprovals((current) => [result.approval!, ...current.filter((item) => item.id !== result.approval!.id)]);
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -214,7 +214,7 @@ export const App = () => {
         {failedResources.length > 0 && !initializing && <div className="resource-errors" aria-label="Dashboard data warnings">{failedResources.map(([key, error]) => <div key={key} className="error-panel compact" role="alert"><div><strong>{resourceLabels[key]} could not be refreshed</strong><p>{error.message}</p></div><button className="action-secondary compact-action" onClick={handleRefresh} disabled={refreshing}>Retry</button></div>)}</div>}
         <ScenarioControls scenarios={scenarios} selectedScenarioId={selectedScenarioId} onSelectScenario={handleScenario} onRunAnalysis={() => void executeAnalysis(selectedScenarioId)} onSimulateSpike={() => handleScenario(scenarios.some((scenario) => scenario.id === "compute_spike") ? "compute_spike" : selectedScenarioId)} onReset={() => handleScenario(scenarios.some((scenario) => scenario.id === "stable_baseline") ? "stable_baseline" : selectedScenarioId)} loading={analyzing || refreshing || initializing} scenariosError={resourceErrors.scenarios?.message ?? null} onRetryScenarios={handleRefresh} productionMode={health?.environment === "production"} costExplorerEnabled={health?.providers.cost_explorer.enabled ?? false} onRunLiveAnalysis={() => void executeAnalysis("__aws_cost_explorer__")} />
         {analysisError && <div className="error-panel" role="alert"><div><strong>Analysis did not complete</strong><p>{analysisError.message}</p></div><button className="action-secondary compact-action" onClick={handleRetry} disabled={analyzing}>Retry analysis</button></div>}
-        {dataWarning && <div role="alert" className="public-demo-notice"><strong>PARTIAL COST DATA</strong> · {dataWarning}</div>}
+        {dataWarning && <div role="alert" className="data-quality-notice"><strong>COST DATA NOTICE</strong> · {dataWarning}</div>}
         {costDataSource && anomaly && <div className="data-provenance-line"><span>DATA SOURCE</span><strong>{costDataSource.replaceAll("_", " ")}</strong><span>ANALYSIS ID</span><code>{anomaly.anomaly_id}</code><span>AS OF</span><time>{new Date(anomaly.detected_at).toLocaleString()}</time></div>}
         {anomaly && <OverviewCards metrics={anomaly.metrics} service={anomaly.service} environment={anomaly.environment} />}
         {!anomaly && !initializing && !analysisError && <section className="empty-state"><span className="eyebrow">NO ANALYSIS LOADED</span><h2>{health?.environment === "production" ? "No cost analysis is available yet." : "Choose a scenario to inspect its cost evidence."}</h2><p>{health?.environment === "production" ? "The current API does not provide organization-scoped AWS cost connections. Synthetic scenarios are disabled in production." : "Run an analysis to display its returned metrics and time series."}</p></section>}

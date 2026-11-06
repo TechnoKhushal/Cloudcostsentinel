@@ -368,7 +368,7 @@ a { color: inherit; }
 .error-panel p { margin-top: 3px; color: #79342f; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
 .error-panel.compact { margin: 0; padding: 8px; }
 .resource-errors { display: grid; gap: 7px; margin-bottom: 11px; }
-.public-demo-notice { margin-bottom: 11px; padding: 9px 12px; border: 1px solid #ead9b3; border-radius: 0; color: #684508; background: #fff8e8; font-size: 10px; }
+.data-quality-notice { margin-bottom: 11px; padding: 9px 12px; border: 1px solid #ead9b3; border-radius: 0; color: #684508; background: #fff8e8; font-size: 10px; }
 .spinner { display: inline-block; width: 13px; height: 13px; margin-right: 7px; border: 2px solid #d9ded2; border-top-color: #5a760f; border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

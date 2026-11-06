@@ -457,8 +457,8 @@ async def analyze_anomaly(
         else:
             anomaly, err = await run_in_threadpool(cost_explorer.fetch_recent_costs)
         cost_data_source = "aws_cost_explorer"
-        if err and err.startswith("PARTIAL_DATA:") and anomaly is not None:
-            data_warnings.append(err)
+        if err and anomaly is not None:
+            data_warnings.extend(part.strip() for part in err.split(" | ") if part.strip())
             anomaly.metrics.uncertainty_flag = True
         elif err or not anomaly:
             raise HTTPException(
@@ -518,7 +518,7 @@ async def analyze_anomaly(
         "approval": approval_item,
         "is_simulated": anomaly.is_simulated,
         "cost_data_source": cost_data_source,
-        "partial_data": bool(data_warnings),
+        "partial_data": any(warning.startswith("PARTIAL_DATA:") for warning in data_warnings),
         "data_warnings": data_warnings,
     }
 

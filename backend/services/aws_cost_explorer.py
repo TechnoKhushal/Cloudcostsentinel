@@ -123,7 +123,10 @@ class AWSCostExplorerService:
             # TimePeriod.End is exclusive in Cost Explorer API.
             # Daily billing metrics typically lag by 24-48 hours.
             end_date = now_utc.date()
-            start_date = end_date - timedelta(days=days)
+            month_start = end_date.replace(day=1)
+            # One request includes full MTD spend and at least 14 prior calendar
+            # days for a recent baseline, including near month boundaries.
+            start_date = min(end_date - timedelta(days=days), month_start)
 
             response = client.get_cost_and_usage(TimePeriod={"Start": start_date.isoformat(), "End": end_date.isoformat()},
                 Granularity="DAILY", Metrics=["UnblendedCost"])
@@ -142,20 +145,34 @@ class AWSCostExplorerService:
                 date_key = item.get("TimePeriod", {}).get("Start", "")
                 metric = item.get("Total", {}).get("UnblendedCost", {})
                 currency = metric.get("Unit", currency)
-                daily_totals[date_key] = round(max(0.0, float(metric.get("Amount", 0.0))), 2)
+                daily_totals[date_key] = round(float(metric.get("Amount", 0.0)), 2)
 
             if budget_currency and currency.upper() != budget_currency.upper():
                 return None, f"AWS billing currency {currency} does not match the workspace budget currency {budget_currency}. Update the workspace budget currency before analysis."
 
-            data_points = list(daily_totals.values())
-            current_day = now_utc.day
+            ordered_dates = sorted(daily_totals)
+            current_month = now_utc.strftime("%Y-%m")
+            current_month_dates = [date_key for date_key in ordered_dates if date_key.startswith(current_month)]
+            if not current_month_dates:
+                return None, "AWS Cost Explorer has not returned current-month cost data yet. Try again when billing data is available."
+
+            latest_date = datetime.strptime(ordered_dates[-1], "%Y-%m-%d").date()
+            if latest_date.strftime("%Y-%m") != current_month:
+                return None, "AWS Cost Explorer has not returned current-month cost data yet. Try again when billing data is available."
+            data_points = [daily_totals[date_key] for date_key in ordered_dates]
+            baseline_start = latest_date - timedelta(days=7)
+            baseline_values = [daily_totals[date_key] for date_key in ordered_dates
+                if baseline_start <= datetime.strptime(date_key, "%Y-%m-%d").date() < latest_date]
+            month_to_date_spend = sum(daily_totals[date_key] for date_key in current_month_dates)
             days_in_current_month = calendar.monthrange(now_utc.year, now_utc.month)[1]
 
             metrics = calculate_spend_metrics(
                 data_points,
                 monthly_budget=monthly_budget,
-                current_day_of_month=current_day,
+                current_day_of_month=latest_date.day,
                 days_in_month=days_in_current_month,
+                baseline_values=baseline_values,
+                month_to_date_spend=month_to_date_spend,
             )
 
             account_label = f"AWS account {expected_account_id}"
@@ -165,11 +182,12 @@ class AWSCostExplorerService:
                     date=dt,
                     spend=amt,
                     baseline=metrics.baseline_spend,
-                    is_anomaly=(amt >= metrics.baseline_spend * 1.2),
+                    is_anomaly=(metrics.baseline_spend > 0 and amt >= metrics.baseline_spend * 1.2),
                     service=account_label,
                     environment="production",
                 )
-                for dt, amt in daily_totals.items()
+                for dt, amt in sorted(daily_totals.items())
+                if datetime.strptime(dt, "%Y-%m-%d").date() >= month_start
             ]
 
             anomaly = CostAnomaly(
@@ -187,15 +205,18 @@ class AWSCostExplorerService:
                 is_simulated=False,
             )
 
-            warning = None
+            warning_parts: List[str] = []
+            data_lag_days = (end_date - latest_date).days
+            if data_lag_days > 2:
+                warning_parts.append(
+                    f"DATA_FRESHNESS: Latest AWS daily cost data is {latest_date.isoformat()} ({data_lag_days} days behind today); AWS billing data commonly arrives 24–48 hours late."
+                )
             if pagination_cap_hit:
-                warning = (
-                    "PARTIAL_DATA: AWS Cost Explorer pagination cap reached (5 pages). "
-                    "Returned cost data covers a subset of the requested period. "
-                    "Reduce the query window or increase the page cap for complete data."
+                warning_parts.append(
+                    "PARTIAL_DATA: AWS returned another Cost Explorer page. Only the first page is included to keep this analysis to one billable request, so totals may be incomplete."
                 )
 
-            return anomaly, warning
+            return anomaly, " | ".join(warning_parts) if warning_parts else None
 
         except (NoCredentialsError, PartialCredentialsError) as cred_err:
             return None, "AWS credentials are unavailable to the backend."

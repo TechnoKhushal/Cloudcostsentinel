@@ -14,6 +14,8 @@ def calculate_spend_metrics(
     days_in_month: Optional[int] = None,
     anomaly_threshold_pct: float = 20.0,
     baseline_window_days: int = 7,
+    baseline_values: Optional[List[float]] = None,
+    month_to_date_spend: Optional[float] = None,
 ) -> SpendMetrics:
     """Deterministic formula-based calculation of spend anomaly metrics.
 
@@ -49,7 +51,9 @@ def calculate_spend_metrics(
     current_spend = datapoints[-1]
 
     # Use pre-anomaly window for baseline if series is long enough, else all prior points
-    if len(datapoints) > 4:
+    if baseline_values is not None:
+        stable_window = baseline_values[-baseline_window_days:]
+    elif len(datapoints) > 4:
         # Candidate baseline window: prior stable points
         window_size = min(baseline_window_days, len(datapoints) - 1)
         stable_window = datapoints[:window_size]
@@ -73,8 +77,13 @@ def calculate_spend_metrics(
     delta_amount = current_spend - baseline_spend
     if baseline_spend > 0.001:
         delta_percentage = (delta_amount / baseline_spend) * 100.0
-    else:
+    elif baseline_spend >= 0:
         delta_percentage = 100.0 if delta_amount > 0 else 0.0
+    else:
+        # Refunds/credits can make UnblendedCost baselines negative. A percentage
+        # increase against a negative denominator is not a meaningful signal.
+        delta_percentage = 0.0
+        uncertainty_flag = True
 
     # Persistence: trailing consecutive days exceeding baseline threshold
     threshold_val = baseline_spend * (1.0 + (anomaly_threshold_pct / 100.0))
@@ -88,10 +97,13 @@ def calculate_spend_metrics(
     # Month to date and forecast
     days_passed = max(1, min(current_day_of_month, days_in_month))
     days_remaining = max(0, days_in_month - days_passed)
-    mtd_spend = sum(datapoints[-days_passed:]) if len(datapoints) >= days_passed else sum(datapoints)
+    if month_to_date_spend is None:
+        mtd_spend = sum(datapoints[-days_passed:]) if len(datapoints) >= days_passed else sum(datapoints)
+    else:
+        mtd_spend = month_to_date_spend
     forecast_month_end = mtd_spend + (days_remaining * current_spend)
     budget_burn_pct = (forecast_month_end / monthly_budget) * 100.0 if monthly_budget > 0 else 100.0
-    anomaly_detected = (delta_percentage >= anomaly_threshold_pct) and (current_spend > 50.0)
+    anomaly_detected = baseline_spend >= 0 and (delta_percentage >= anomaly_threshold_pct) and (current_spend > 50.0)
 
     return SpendMetrics(
         current_spend=round(current_spend, 2),
