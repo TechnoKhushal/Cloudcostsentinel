@@ -36,9 +36,9 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 | `NOTIFICATION_PROVIDER` | Yes | `disabled` until a real, separately reviewed notification integration is configured. `mock` is blocked in production. |
 | `OPENROUTER_API_KEY` | No | Optional backend-only key. Omit to use the deterministic explanation. |
 | `OPENROUTER_MODEL` | No | Required only with the key. Must be `openrouter/free` or an explicitly free model ID ending in `:free`; no paid fallback is allowed. Free availability, caps and pricing can change. |
-| `AWS_COST_EXPLORER_ENABLED` | Yes for live AWS ingestion | `true` to enable the customer-owned IAM role workflow. Production requires the platform AWS identity below when enabled. |
-| `AWS_ACCESS_KEY_ID` | Required when AWS ingestion is enabled | Platform IAM user access key with only `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`; store as a Render secret. It must not have Cost Explorer or resource mutation permissions. |
-| `AWS_SECRET_ACCESS_KEY` | Required when AWS ingestion is enabled | Matching platform IAM secret key. Never set it in Vercel or a `VITE_*` variable. |
+| `AWS_COST_EXPLORER_ENABLED` | Yes | `true`. Production refuses to start without tenant-scoped live AWS ingestion enabled. |
+| `AWS_ACCESS_KEY_ID` | Yes | Platform IAM user access key with only `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`; store as a Render secret. It must not have Cost Explorer or resource mutation permissions. |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Matching platform IAM secret key. Never set it in Vercel or a `VITE_*` variable. |
 | `AWS_SESSION_TOKEN` | No | Only for a temporary platform credential set. |
 | `AWS_REGION` | No | Cost Explorer endpoint region; defaults to `us-east-1`. |
 | `AWS_COST_EXPLORER_DAILY_QUERY_LIMIT` | No | Durable per-workspace daily cap; defaults to 20 and allows 1–1000. Each query is one AWS Cost Explorer API request. |

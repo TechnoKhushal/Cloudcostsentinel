@@ -534,6 +534,9 @@ def test_database_path_configuration_is_explicit_and_render_demo_default_is_ephe
             SUPABASE_URL="https://sentinel.supabase.co",
             SUPABASE_ANON_KEY="public-anon-placeholder",
             NOTIFICATION_PROVIDER="disabled",
+                AWS_COST_EXPLORER_ENABLED=True,
+                AWS_ACCESS_KEY_ID="platform-access",
+                AWS_SECRET_ACCESS_KEY="platform-secret",
             DATABASE_PATH=str(Path(tempfile.gettempdir()) / "sentinel-prod.db"),
         )
     production.validate_startup()
@@ -667,6 +670,10 @@ def test_production_aws_cost_explorer_requires_assume_role_identity():
     with pytest.raises(ValueError, match="sts:AssumeRole only"):
         Settings(**configuration).validate_startup()
     Settings(**configuration, AWS_ACCESS_KEY_ID="platform-access", AWS_SECRET_ACCESS_KEY="platform-secret").validate_startup()
+
+    with pytest.raises(ValueError, match="AWS_COST_EXPLORER_ENABLED must be true"):
+        Settings(**{**configuration, "AWS_COST_EXPLORER_ENABLED": False},
+                 AWS_ACCESS_KEY_ID="platform-access", AWS_SECRET_ACCESS_KEY="platform-secret").validate_startup()
 
 
 def test_production_role_connection_and_budget_inputs_are_strictly_validated():

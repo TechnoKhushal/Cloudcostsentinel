@@ -211,12 +211,16 @@ class Settings(BaseModel):
             if self.NOTIFICATION_PROVIDER == "mock":
                 raise ValueError("Production startup prohibits simulated notifications; use disabled or a verified provider.")
 
-            if self.AWS_COST_EXPLORER_ENABLED:
-                if not self.AWS_ACCESS_KEY_ID or not self.AWS_SECRET_ACCESS_KEY:
-                    raise ValueError(
-                        "Tenant-scoped AWS Cost Explorer requires a platform IAM identity with sts:AssumeRole only. "
-                        "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backend secret store."
-                    )
+            if not self.AWS_COST_EXPLORER_ENABLED:
+                raise ValueError(
+                    "Production startup refused: AWS_COST_EXPLORER_ENABLED must be true. "
+                    "Production analysis accepts verified tenant AWS Cost Explorer telemetry only."
+                )
+            if not self.AWS_ACCESS_KEY_ID or not self.AWS_SECRET_ACCESS_KEY:
+                raise ValueError(
+                    "Tenant-scoped AWS Cost Explorer requires a platform IAM identity with sts:AssumeRole only. "
+                    "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backend secret store."
+                )
 
         if self.ENVIRONMENT == "demo":
             self._validate_public_origins()
