@@ -10,7 +10,8 @@ boto3>=1.34.0
 pyjwt[crypto]>=2.8.0
 cryptography>=42.0.0
 
-# Persistence currently uses Python's SQLite driver. PostgreSQL is not implemented.
+# SQLite is the local/demo adapter. Production persistence uses Supabase Auth,
+# PostgREST and Storage over HTTPS with the caller's JWT; no DB driver is needed.
 
 # Strands framework adapter; the heavyweight standalone model runtime is optional.
 strands-agents>=1.62.0

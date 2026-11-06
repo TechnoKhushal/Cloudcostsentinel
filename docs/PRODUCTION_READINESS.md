@@ -85,7 +85,7 @@ Environment: Windows, Python 3.11.9, Node 24.21.0, npm 11.19.0. A fresh Python e
 
 ## Blockers before authenticated production
 
-1. Implement and test the frontend OIDC authorization-code + PKCE login/callback/token lifecycle; the frontend currently does not authenticate users.
+1. The frontend implements Supabase Auth sign-up, sign-in, password recovery, session restoration/refresh, and bearer-token API calls using PKCE. Verify callback, email confirmation, recovery, JWT signing-key rotation, and sign-out flows against a configured Supabase project; these live-project lifecycle checks have not been run.
 2. Attach and verify durable storage, migration/backup/restore behavior, and operational recovery. Current public demo uses ephemeral SQLite unless Render is explicitly configured with a writable disk.
 3. Configure and verify real providers, IAM least privilege, provider timeouts/error states, and live data freshness. Current Render responses explicitly report simulated providers and AWS Cost Explorer off.
 4. Add shared rate limiting or keep one backend process; current demo controls are process-local and public.
