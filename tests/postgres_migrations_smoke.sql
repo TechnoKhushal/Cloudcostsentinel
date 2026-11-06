@@ -31,3 +31,8 @@ reset role;
 set request.jwt.claim.sub = '33333333-3333-4333-8333-333333333333';
 set role authenticated;
 select 1 / case when (select count(*) from public.cost_analyses) = 0 then 1 else 0 end as assert_unassociated_user_cannot_read;
+
+reset role;
+set role anon;
+select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v5' then 1 else 0 end
+  as assert_production_readiness_probe;

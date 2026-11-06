@@ -2,7 +2,8 @@
 
 ## Production schema, PKCE, and deployment follow-up (2026-11-07)
 
-- Applied all four ordered migrations in a disposable PostgreSQL 16 container after creating minimal Supabase-shaped `auth` and `storage` schemas. The first run caught and fixed a missing `UNIQUE (organization_id, id)` target needed by composite foreign keys from findings/reports to scans. This is a local compatibility smoke test; the hosted Supabase migration/RLS/Storage implementation remains unverified.
+- Applied all five ordered migrations in a disposable PostgreSQL 16 container after creating minimal Supabase-shaped `auth` and `storage` schemas. The first run caught and fixed a missing `UNIQUE (organization_id, id)` target needed by composite foreign keys from findings/reports to scans. This is a local compatibility smoke test; the hosted Supabase migration/RLS/Storage implementation remains unverified.
+- Added migration 005's anonymous, non-sensitive schema-version probe and changed Render startup/readiness to require all expected RLS tables/policies, RPCs, and the private reports bucket. The local PostgreSQL harness verifies the probe; an unconfigured or incompletely migrated project now fails production startup/readiness closed.
 - Smoke-tested personal workspace provisioning and owner-role lookup, `persist_analysis_bundle`, cross-user read denial for an unassociated user, AWS quota rejection and saturation, and workspace budget update triggers. Hosted Supabase still needs adversarial RLS and Auth tests.
 - Set Supabase Auth to explicit PKCE, and added a frontend unit test for PKCE, session restoration, and refresh options.
 - Backend tests: 58 passed. Frontend tests: 23 passed; lint and production build passed. GitHub Actions succeeded for [commit 6585ac4](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/42288761801).

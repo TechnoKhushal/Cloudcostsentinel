@@ -15,6 +15,39 @@ def _repository(handler):
     return SupabaseRepository("https://project.supabase.co", "public-anon-key", client=client)
 
 
+def test_production_readiness_requires_the_expected_complete_schema_version():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.method == "POST"
+        assert request.url.path == "/rest/v1/rpc/cloudcost_sentinel_schema_version"
+        assert request.headers["apikey"] == "public-anon-key"
+        assert "authorization" not in request.headers
+        assert json.loads(request.content) == {}
+        return httpx.Response(200, json="cloudcost-sentinel-v5")
+
+    repo = _repository(handler)
+    try:
+        assert repo.check_ready() is True
+    finally:
+        repo.close()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(404, json={"message": "function not found"}),
+    httpx.Response(200, json="incomplete"),
+    httpx.Response(200, json={"version": "cloudcost-sentinel-v5"}),
+])
+def test_production_readiness_fails_if_schema_probe_is_missing_or_mismatched(response):
+    repo = _repository(lambda _request: response)
+    try:
+        assert repo.check_ready() is False
+    finally:
+        repo.close()
+
+
 @pytest.mark.asyncio
 async def test_analysis_bundle_uploads_private_report_then_persists_tenant_bundle_atomically():
     org_id, user_id = str(uuid4()), str(uuid4())

@@ -11,9 +11,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202610260002_api_runtime.sql",
         "202610260003_membership_role_and_storage_cleanup.sql",
         "202611070001_tenant_aws_role_connections.sql",
+        "202611070002_production_schema_readiness.sql",
     ]
-    base, runtime, upgrade, customer_aws = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade, customer_aws):
+    base, runtime, upgrade, customer_aws, readiness = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws, readiness):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -38,5 +39,8 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "workspace_finops_settings" in customer_aws
     assert "aws_cost_query_usage" in customer_aws
     assert "least(public.aws_cost_query_usage.request_count + 1, p_daily_limit + 1)" in customer_aws
+    assert "cloudcost_sentinel_schema_version" in readiness
+    assert "grant execute on function public.cloudcost_sentinel_schema_version() to anon" in readiness
+    assert "notify pgrst, 'reload schema'" in readiness
     assert "service_role" not in customer_aws
-    assert "service_role" not in base + runtime + upgrade + customer_aws
+    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness

@@ -110,9 +110,14 @@ class SupabaseRepository:
 
     def check_ready(self) -> bool:
         try:
-            response = self._client.get(f"{self.url}/rest/v1/", headers={"apikey": self.anon_key, "Accept": "application/openapi+json;version=3"}, timeout=httpx.Timeout(3.0, connect=2.0))
-            return response.status_code == 200
-        except httpx.HTTPError:
+            response = self._client.post(
+                f"{self.url}/rest/v1/rpc/cloudcost_sentinel_schema_version",
+                json={},
+                headers={"apikey": self.anon_key, "Accept": "application/json"},
+                timeout=httpx.Timeout(3.0, connect=2.0),
+            )
+            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v5"
+        except (httpx.HTTPError, ValueError):
             return False
 
     def save_analysis_bundle(self, anomaly: CostAnomaly, source: str, trace: DeciderResponseTrace,

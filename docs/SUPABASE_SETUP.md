@@ -8,7 +8,7 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 
 1. Create a dedicated Supabase project. Enable email/password authentication and email verification. Configure allowed redirect URLs to the exact Vercel site and local development URL.
 2. Set an asymmetric Supabase JWT signing key (RS256 or ES256) and note the project's URL and publishable/anon key. The backend verifies asymmetric JWTs using the Supabase JWKS endpoint.
-3. Back up the project if it contains data. Apply the four migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, and `202611070001_tenant_aws_role_connections.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
+3. Back up the project if it contains data. Apply the five migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, `202611070001_tenant_aws_role_connections.sql`, and `202611070002_production_schema_readiness.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
 4. Inspect the tables, functions, RLS policies, private `sentinel-reports` bucket, `aws_account_connections`, durable per-workspace query counters, and workspace budget table. Run adversarial tests with two isolated accounts and verify cross-workspace reads, writes, approvals, AWS connections, budgets, object downloads and deletes fail.
 5. Configure the frontend and backend variables below. Deploy API and frontend only after migration, AWS role trust, and account-flow checks pass.
 
