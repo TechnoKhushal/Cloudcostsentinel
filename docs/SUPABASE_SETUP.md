@@ -45,6 +45,8 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 
 `AUTH_ISSUER`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL` may be omitted for Supabase; the API derives them from `SUPABASE_URL` and uses audience `authenticated`. `PORT` is provided by Render. Do not set `DATABASE_PATH`, `DATABASE_URL`, Supabase service-role keys, customer AWS keys, or secrets with a `VITE_` prefix for production.
 
+If the Render Docker image also serves its bundled frontend, set the same three public `VITE_*` values in Render so Docker can pass them to the Vite build stage. The Dockerfile only declares those public build arguments; AWS and OpenRouter credentials remain runtime-only. The separate Vercel frontend still needs its own three Vercel build variables.
+
 ## AWS customer account connection
 
 1. Set `AWS_COST_EXPLORER_ENABLED=true` only after the Render platform identity has an IAM policy allowing `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`. The platform key belongs in Render's secret store and has no direct Cost Explorer permissions.

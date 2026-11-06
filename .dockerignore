@@ -1,0 +1,38 @@
+# Repository metadata and local tooling
+.git
+.github
+.codex
+.tmp
+.tmp_wheels
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+**/.pytest_cache
+.coverage
+htmlcov
+
+# Node/Python dependencies and generated outputs
+**/node_modules
+**/.venv
+**/venv
+**/.vite
+frontend/dist
+**/dist
+build
+
+# Local credentials, environments, cloud config, databases, and logs
+**/.env*
+!.env.example
+!**/.env.example
+.aws
+**/.aws
+credentials
+**/credentials
+*.pem
+*.key
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs

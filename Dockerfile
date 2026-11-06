@@ -1,6 +1,11 @@
 # Stage 1: Build React Frontend
 FROM node:24-alpine AS frontend-builder
 WORKDIR /build
+# These are browser-public configuration values only; never pass backend secrets
+# or a Supabase service-role key as frontend build arguments.
+ARG VITE_API_BASE_URL
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./

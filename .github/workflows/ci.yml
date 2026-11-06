@@ -70,6 +70,28 @@ jobs:
           done
           psql "$SUPABASE_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/postgres_migrations_smoke.sql
 
+      - name: Build and smoke-test the Render container
+        run: |
+          docker build --tag cloudcost-sentinel:ci \
+            --build-arg VITE_API_BASE_URL=https://cloudcostsentinel.onrender.com \
+            --build-arg VITE_SUPABASE_URL=https://example.supabase.co \
+            --build-arg VITE_SUPABASE_ANON_KEY=public-ci-anon-key .
+          container_id=$(docker run --detach --publish 127.0.0.1:18088:8000 \
+            --env ENVIRONMENT=demo --env HOST=0.0.0.0 --env AUTH_ENABLED=false \
+            --env DECIDER_PROVIDER=mock --env NOTIFICATION_PROVIDER=mock \
+            --env AWS_COST_EXPLORER_ENABLED=false \
+            --env CORS_ORIGINS=https://cloudcostsentinel.vercel.app \
+            --env DATABASE_PATH=/tmp/cloudcost-sentinel-ci.db cloudcost-sentinel:ci)
+          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18088/api/health/ready >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18088/api/health/ready
+          curl --fail --silent http://127.0.0.1:18088/index.html | grep -q 'assets/index-'
+
       - name: Run Pattern Tests
         run: |
           python -m pytest -v patterns/threshold_aware_anomaly_response/test_pattern.py
