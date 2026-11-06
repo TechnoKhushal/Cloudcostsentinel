@@ -4,7 +4,7 @@ import calendar
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
@@ -74,14 +74,26 @@ class AWSCostExplorerService:
             logger.warning("AWS platform identity check failed (%s).", type(exc).__name__)
             return None
 
-    def verify_connection(self, role_arn: str, external_id: str, expected_account_id: str) -> tuple[bool, Optional[str]]:
+    def verify_connection(self, role_arn: str, external_id: str, expected_account_id: str,
+                          query_admission: Optional[Callable[[], bool]] = None) -> tuple[bool, Optional[str]]:
         """Verify the external ID, role trust, account identity, and CE read permission."""
         if not self.enabled:
             return False, "AWS Cost Explorer ingestion is disabled by platform configuration."
         try:
             session, identity = self._assume_customer_role(role_arn, external_id)
-            if identity.get("Account") != expected_account_id:
-                return False, "The assumed AWS role belongs to a different account than the configured role ARN."
+        except (NoCredentialsError, PartialCredentialsError):
+            return False, "The platform AWS AssumeRole identity is not configured."
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "AWSAccessError")
+            return False, f"AWS role verification failed ({str(code)[:80]}). Check the role trust and read-only Cost Explorer policy."
+        except Exception as exc:
+            logger.warning("AWS role verification failed (%s).", type(exc).__name__)
+            return False, "AWS role verification is temporarily unavailable."
+        if identity.get("Account") != expected_account_id:
+            return False, "The assumed AWS role belongs to a different account than the configured role ARN."
+        if query_admission is not None and not query_admission():
+            return False, "QUOTA_EXHAUSTED"
+        try:
             end_date = datetime.now(timezone.utc).date()
             start_date = end_date - timedelta(days=1)
             session.client("ce", region_name=self.region_name,
@@ -102,6 +114,7 @@ class AWSCostExplorerService:
         self, days: int = 14, monthly_budget: float = 10000.0,
         role_arn: Optional[str] = None, external_id: Optional[str] = None,
         expected_account_id: Optional[str] = None, budget_currency: Optional[str] = None,
+        query_admission: Optional[Callable[[], bool]] = None,
     ) -> Tuple[Optional[CostAnomaly], Optional[str]]:
         """Fetch a bounded daily account-total series through a tenant's read-only role.
 
@@ -115,8 +128,20 @@ class AWSCostExplorerService:
 
         try:
             session, identity = self._assume_customer_role(role_arn, external_id)
-            if identity.get("Account") != expected_account_id:
-                return None, "The connected AWS role account could not be verified. Reconnect the customer role."
+        except (NoCredentialsError, PartialCredentialsError):
+            return None, "AWS credentials are unavailable to the backend."
+        except ClientError as ce:
+            err_code = ce.response.get("Error", {}).get("Code", "ClientError")
+            return None, f"AWS Cost Explorer request failed ({err_code[:80]})."
+        except Exception as exc:
+            logger.warning("Cost Explorer role assumption failed (%s).", type(exc).__name__)
+            return None, "AWS Cost Explorer is temporarily unavailable."
+        if identity.get("Account") != expected_account_id:
+            return None, "The connected AWS role account could not be verified. Reconnect the customer role."
+        if query_admission is not None and not query_admission():
+            return None, "QUOTA_EXHAUSTED"
+
+        try:
             client = session.client("ce", region_name=self.region_name,
                 config=Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 1, "mode": "standard"}))
             now_utc = datetime.now(timezone.utc)

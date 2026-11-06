@@ -129,6 +129,56 @@ def test_cost_explorer_surfaces_stale_or_paginated_data_without_extra_requests()
     assert len(ce.calls) == 1
 
 
+def test_workspace_quota_is_reserved_only_after_role_identity_is_validated():
+    sts = _Sts("999999999999")
+    ce = _CostExplorer(_cost_response())
+    admission_calls = []
+    with patch("backend.services.aws_cost_explorer.boto3.client", return_value=sts), \
+         patch("backend.services.aws_cost_explorer.boto3.Session", return_value=_Session(ce, "999999999999")), \
+         patch("backend.services.aws_cost_explorer.datetime", _FrozenDateTime):
+        anomaly, error = AWSCostExplorerService(enabled=True).fetch_recent_costs(
+            role_arn="arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly",
+            external_id="f" * 32,
+            expected_account_id="123456789012",
+            query_admission=lambda: admission_calls.append(True) or True,
+        )
+    assert anomaly is None
+    assert error == "The connected AWS role account could not be verified. Reconnect the customer role."
+    assert admission_calls == []
+    assert ce.calls == []
+
+
+def test_exhausted_quota_does_not_call_the_billable_cost_explorer_api():
+    ce = _CostExplorer(_cost_response())
+    with patch("backend.services.aws_cost_explorer.boto3.client", return_value=_Sts("123456789012")), \
+         patch("backend.services.aws_cost_explorer.boto3.Session", return_value=_Session(ce)), \
+         patch("backend.services.aws_cost_explorer.datetime", _FrozenDateTime):
+        anomaly, error = AWSCostExplorerService(enabled=True).fetch_recent_costs(
+            role_arn="arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly",
+            external_id="1" * 32,
+            expected_account_id="123456789012",
+            query_admission=lambda: False,
+        )
+    assert anomaly is None
+    assert error == "QUOTA_EXHAUSTED"
+    assert ce.calls == []
+
+
+def test_connection_verification_reserves_quota_after_sts_and_before_cost_explorer():
+    ce = _CostExplorer(_cost_response())
+    with patch("backend.services.aws_cost_explorer.boto3.client", return_value=_Sts("123456789012")), \
+         patch("backend.services.aws_cost_explorer.boto3.Session", return_value=_Session(ce)):
+        verified, error = AWSCostExplorerService(enabled=True).verify_connection(
+            "arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly",
+            "2" * 32,
+            "123456789012",
+            query_admission=lambda: False,
+        )
+    assert verified is False
+    assert error == "QUOTA_EXHAUSTED"
+    assert ce.calls == []
+
+
 def test_cost_explorer_blocks_forecasts_until_current_month_data_exists():
     response = _cost_response(today=date(2026, 10, 31))
     ce = _CostExplorer(response)

@@ -395,10 +395,11 @@ async def verify_aws_integration(principal: AuthenticatedPrincipal = Depends(req
         raise HTTPException(status_code=404, detail="Connect an AWS role before verifying it.")
     if not cost_explorer.enabled:
         raise HTTPException(status_code=503, detail="Tenant-scoped AWS ingestion is disabled by platform configuration.")
-    if not await run_in_threadpool(db.reserve_aws_cost_query, settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT):
-        raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
     verified, error = await run_in_threadpool(cost_explorer.verify_connection,
-        connection["role_arn"], connection["external_id"], connection["account_id"].strip())
+        connection["role_arn"], connection["external_id"], connection["account_id"].strip(),
+        query_admission=lambda: db.reserve_aws_cost_query(settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT))
+    if error == "QUOTA_EXHAUSTED":
+        raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
     if not verified:
         await run_in_threadpool(db.set_aws_account_connection_status, "pending", verified_at=None)
         raise HTTPException(status_code=422, detail=error or "AWS role verification failed.")
@@ -449,14 +450,15 @@ async def analyze_anomaly(
             connection = await run_in_threadpool(db.get_aws_account_connection)
             if not connection or connection.get("status") != "connected":
                 raise HTTPException(status_code=409, detail="Connect and verify an AWS Cost Explorer role for this workspace before analysis.")
-            if not await run_in_threadpool(db.reserve_aws_cost_query, settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT):
-                raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
             anomaly, err = await run_in_threadpool(cost_explorer.fetch_recent_costs,
                 14, float(finops_settings["monthly_budget"]), connection["role_arn"],
-                connection["external_id"], connection["account_id"].strip(), finops_settings["currency"])
+                connection["external_id"], connection["account_id"].strip(), finops_settings["currency"],
+                query_admission=lambda: db.reserve_aws_cost_query(settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT))
         else:
             anomaly, err = await run_in_threadpool(cost_explorer.fetch_recent_costs)
         cost_data_source = "aws_cost_explorer"
+        if err == "QUOTA_EXHAUSTED":
+            raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
         if err and anomaly is not None:
             data_warnings.extend(part.strip() for part in err.split(" | ") if part.strip())
             anomaly.metrics.uncertainty_flag = True
