@@ -4,15 +4,19 @@ const url = import.meta.env?.VITE_SUPABASE_URL?.trim();
 const anonKey = import.meta.env?.VITE_SUPABASE_ANON_KEY?.trim();
 
 export const supabaseConfigured = Boolean(url && anonKey);
+export function createSupabaseAuthOptions(storage: Storage) {
+  return {
+    flowType: "pkce" as const,
+    storage,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  };
+}
+
 export const supabase = supabaseConfigured
   ? createClient(url!, anonKey!, {
-      auth: {
-        flowType: "pkce",
-        storage: window.sessionStorage,
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
+      auth: createSupabaseAuthOptions(window.sessionStorage),
     })
   : null;
 
