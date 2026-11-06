@@ -10,6 +10,20 @@ jobs:
   backend-checks:
     name: Backend Tests & Compilation
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sentinel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sentinel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,6 +33,11 @@ jobs:
         with:
           python-version-file: ".python-version"
           cache: "pip"
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-client
 
       - name: Install backend dependencies
         run: |
@@ -40,6 +59,16 @@ jobs:
       - name: Run Backend Tests
         run: |
           python -m pytest -v tests
+
+      - name: Apply Supabase migrations and test tenant isolation
+        env:
+          SUPABASE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sentinel_test
+        run: |
+          psql "$SUPABASE_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/postgres_migrations_bootstrap.sql
+          for migration in supabase/migrations/*.sql; do
+            psql "$SUPABASE_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          psql "$SUPABASE_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/postgres_migrations_smoke.sql
 
       - name: Run Pattern Tests
         run: |
