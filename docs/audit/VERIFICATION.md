@@ -6,6 +6,7 @@
 - Smoke-tested personal workspace provisioning and owner-role lookup, `persist_analysis_bundle`, cross-user read denial for an unassociated user, AWS quota rejection and saturation, and workspace budget update triggers. Hosted Supabase still needs adversarial RLS and Auth tests.
 - Set Supabase Auth to explicit PKCE, and added a frontend unit test for PKCE, session restoration, and refresh options.
 - Backend tests: 58 passed. Frontend tests: 23 passed; lint and production build passed. GitHub Actions succeeded for [commit 6585ac4](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/42288761801).
+- GitHub Actions succeeded for [commit 9381c4f](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/42289972839), including the new PostgreSQL 16 migration, workspace persistence, quota, and tenant read-isolation smoke step.
 - Live recheck: Render health/readiness and Vercel root returned HTTP 200; Vercel served the updated UI bundle. Render continues to report `environment=demo`, SQLite persistence, simulated decisions, and disabled AWS ingestion. CORS from Vercel origin to Render API returned the matching allowed origin.
 - Production deployment is still blocked on real Supabase project config/migration application, production Vercel/Render variables, and a least-privilege platform AWS role. No production-mode switch or real customer AWS call was performed.
 
