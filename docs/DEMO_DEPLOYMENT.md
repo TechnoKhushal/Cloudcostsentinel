@@ -26,7 +26,7 @@ CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaal
 
 Do not add `ALLOW_MOCK_IN_PRODUCTION`; the application does not read that legacy variable. Production startup already rejects mock providers.
 
-The current Render demo has no verified persistent disk, so use `/tmp/cloudcost-sentinel.db`. This is writable demo storage, not durable: approvals and other records may disappear on restart/redeploy. Do not configure `DATABASE_URL`: PostgreSQL is not implemented and startup rejects it. Supabase migration foundations are documented in `SUPABASE_SETUP.md`, but are not yet used by the API.
+The current Render demo has no verified persistent disk, so use `/tmp/cloudcost-sentinel.db`. This is writable demo storage, not durable: approvals and other records may disappear on restart/redeploy. Do not configure `DATABASE_URL`: this application does not use a direct PostgreSQL connection string. The authenticated production adapter uses Supabase Auth, PostgREST and Storage with each caller's JWT; configure it using `SUPABASE_SETUP.md` rather than changing the demo settings here.
 
 ## Vercel frontend
 
@@ -52,4 +52,4 @@ The live probe should return 200. In `ENVIRONMENT=demo`, readiness should return
 
 ## Authenticated production
 
-Production remains separate from this demo. Supabase Auth, tenant-scoped repository integration, RLS verification and a browser sign-in flow are not implemented yet, so this repository is not ready for private customer data.
+Production remains separate from this demo. The source contains Supabase Auth, tenant-scoped repository and private Storage integrations plus a browser sign-in flow. The live Supabase migrations, two-account RLS/Storage checks, production browser lifecycle, AWS role flow and Render/Vercel production configuration are not verified; do not use the public demo for private customer data.

@@ -162,7 +162,7 @@ Detailed documentation:
 Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL=openrouter/free` in the backend environment only, or choose a verified model variant ending in `:free`. The backend rejects paid model IDs and does not configure a paid-model fallback. OpenRouter's [free router](https://openrouter.ai/openrouter/free) currently routes only to free variants, though availability and rate limits can change. The app has no default model and never places the key in Vite/browser variables. If unset or unavailable, it uses a clearly labeled deterministic fallback.
 
 ### Supabase status
-The three ordered migrations and deployment steps are documented in [Supabase setup](docs/SUPABASE_SETUP.md). The production adapter is implemented, but no live Supabase project was available to apply or verify the migrations, RLS policies or storage access. Do not enable production traffic until the documented two-account isolation and browser checks pass.
+The five ordered migrations and deployment steps are documented in [Supabase setup](docs/SUPABASE_SETUP.md). The production adapter is implemented, but no live Supabase project was available to apply or verify the migrations, RLS policies or storage access. Do not enable production traffic until the documented two-account isolation and browser checks pass.
 
 ## 7. Hosted Demo / Production Status
 

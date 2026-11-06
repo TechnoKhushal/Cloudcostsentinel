@@ -1,6 +1,6 @@
 # Vercel + Render deployment
 
-This repository's public demo is synthetic and shared. It uses mock Decider and report providers, SQLite, and application-only approval records. The current Render configuration uses ephemeral `/tmp` storage unless a writable persistent disk is verified and explicitly configured. It never applies changes to AWS. Do not configure AWS Cost Explorer or real notification providers for this demo.
+This repository's public demo is synthetic and shared. It uses mock Decider/report providers and SQLite and never applies changes to AWS. Authenticated production uses a separate Supabase-backed path described in [Supabase setup](SUPABASE_SETUP.md); do not copy demo settings into that deployment. Do not configure AWS Cost Explorer or real notification providers for this demo.
 
 The default demo uses local synthetic providers and requires no provider API key. Optional OpenRouter models have model-specific pricing and availability; the free-model catalog currently lists zero-priced models, but capacity/rate limits vary. AWS Cost Explorer and SNS may also incur charges. Keep these integrations disabled for a no-provider-cost demo. See [OpenRouter free models](https://openrouter.ai/collections/free-models), [Cost Explorer API pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/), and [SNS pricing](https://aws.amazon.com/sns/pricing/).
 
@@ -22,7 +22,7 @@ Set this non-secret build variable in each environment that should serve the app
 VITE_API_BASE_URL=https://cloudcostsentinel.onrender.com
 ```
 
-Use the backend origin only: no `/api` suffix and no trailing slash. The frontend adds API paths itself. This is the only API configuration variable the current frontend needs. Never put AWS credentials, OIDC client secrets, or backend tokens in a `VITE_*` variable; Vite embeds those values in public browser assets.
+Use the backend origin only: no `/api` suffix and no trailing slash. The frontend adds API paths itself. This is the only frontend variable needed for the public demo. Authenticated production also requires `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as documented in [Supabase setup](SUPABASE_SETUP.md). Never put AWS credentials, OIDC client secrets, Supabase service-role keys, or backend tokens in a `VITE_*` variable; Vite embeds those values in public browser assets.
 
 If the app is intended to be public, review Vercel Deployment Protection for the production domain and choose the appropriate access policy in the Vercel project. The observed login redirect prevented browser verification; do not assume it is a CORS symptom.
 
@@ -50,9 +50,9 @@ CORS_ORIGINS=https://cloudcostsentinel.vercel.app,https://cloudcostsentinel-gaal
 
 Do not configure `ALLOW_MOCK_IN_PRODUCTION`; it is not read by this application. Production startup already rejects mock providers.
 
-If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`; do not set `DATABASE_URL` because PostgreSQL is not implemented. `/tmp/cloudcost-sentinel.db` is ephemeral and records can disappear on restart/redeploy. To preserve state, attach and verify a writable persistent disk first, then set `DATABASE_PATH` to its mount; a configured unwritable path causes a clear startup failure, never a fallback. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); current startup validation refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
+If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`. The demo's `/tmp/cloudcost-sentinel.db` is ephemeral and records can disappear on restart/redeploy. Do not set `DATABASE_PATH` or `DATABASE_URL` for production: production startup requires Supabase Auth configuration and the Supabase-backed repository, with no SQLite or direct-Postgres fallback. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); startup refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
 
-Do not copy these demo settings into a real production deployment. Production requires validated OIDC/JWKS, non-mock providers, and persistent storage; the browser OIDC sign-in flow is not implemented.
+Do not copy these demo settings into a real production deployment. Production requires the Supabase variables and all five migrations in [Supabase setup](SUPABASE_SETUP.md), `DECIDER_PROVIDER=rules` or a verified external HTTP decider, `NOTIFICATION_PROVIDER=disabled` or a verified provider, and a successful schema readiness probe. The frontend's Supabase sign-in flow is implemented but still requires real-project lifecycle testing.
 
 ## Post-deploy smoke checks
 

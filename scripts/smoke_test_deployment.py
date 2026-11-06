@@ -30,7 +30,9 @@ def main() -> int:
         assert health.get("auth", {}).get("mode") == "explicit_demo", "demo auth mode is not explicit_demo"
         providers = health.get("providers", {})
         assert providers.get("decider", {}).get("state") == "simulated", "Decider is not reported as simulated"
-        assert providers.get("bedrock", {}).get("state") == "simulated", "Bedrock is not reported as simulated"
+        narrator = providers.get("narrator", {})
+        assert narrator.get("provider") in {"offline", "openrouter"}, "narrator provider is not recognized"
+        assert narrator.get("state") in {"offline", "configured_unverified"}, "narrator state is not truthful"
         assert not providers.get("cost_explorer", {}).get("enabled"), "Cost Explorer must be disabled in demo"
 
         status_code, ready = request_json(f"{origin}/api/health/ready")
