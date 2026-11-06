@@ -19,6 +19,7 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         assert sql.rstrip().endswith("commit;")
     for table in ("profiles", "organizations", "organization_members", "audit_events"):
         assert f"alter table public.{table} enable row level security" in base
+    assert "unique (organization_id, id)" in base.split("create table if not exists public.scans", 1)[1].split("create index", 1)[0]
     for table in ("cost_analyses", "decision_traces", "approval_queue", "investigation_reports"):
         assert f"alter table public.{table} enable row level security" in runtime
     assert "values ('sentinel-reports', 'sentinel-reports', false" in base

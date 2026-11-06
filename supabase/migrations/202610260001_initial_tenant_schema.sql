@@ -39,6 +39,7 @@ create table if not exists public.scans (
   error_summary text check (char_length(error_summary) <= 1000),
   idempotency_key text,
   created_at timestamptz not null default now(),
+  unique (organization_id, id),
   unique (organization_id, idempotency_key)
 );
 create index if not exists scans_org_created_idx on public.scans(organization_id, created_at desc, id desc);

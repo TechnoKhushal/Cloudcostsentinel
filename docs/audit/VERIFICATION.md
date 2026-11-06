@@ -1,5 +1,14 @@
 # Verification log
 
+## Production schema, PKCE, and deployment follow-up (2026-11-07)
+
+- Applied all four ordered migrations in a disposable PostgreSQL 16 container after creating minimal Supabase-shaped `auth` and `storage` schemas. The first run caught and fixed a missing `UNIQUE (organization_id, id)` target needed by composite foreign keys from findings/reports to scans. This is a local compatibility smoke test; the hosted Supabase migration/RLS/Storage implementation remains unverified.
+- Smoke-tested personal workspace provisioning and owner-role lookup, `persist_analysis_bundle`, cross-user read denial for an unassociated user, AWS quota rejection and saturation, and workspace budget update triggers. Hosted Supabase still needs adversarial RLS and Auth tests.
+- Set Supabase Auth to explicit PKCE, and added a frontend unit test for PKCE, session restoration, and refresh options.
+- Backend tests: 58 passed. Frontend tests: 23 passed; lint and production build passed. GitHub Actions succeeded for [commit 6585ac4](https://github.com/TechnoKhushal/Cloudcostsentinel/actions/runs/42288761801).
+- Live recheck: Render health/readiness and Vercel root returned HTTP 200; Vercel served the updated UI bundle. Render continues to report `environment=demo`, SQLite persistence, simulated decisions, and disabled AWS ingestion. CORS from Vercel origin to Render API returned the matching allowed origin.
+- Production deployment is still blocked on real Supabase project config/migration application, production Vercel/Render variables, and a least-privilege platform AWS role. No production-mode switch or real customer AWS call was performed.
+
 ## Supabase integration code update (2026-10-27)
 
 This update adds a production-only Supabase Auth/JWT, user-token PostgREST and private Storage code path, report download endpoint, profile endpoint, and three ordered migrations. The original migration files are unchanged; migration 003 adds the membership role and owner cleanup policy. It also adds a Supabase sign-up/sign-in/recovery gate, Vercel public Supabase configuration, and lazy chart loading. Production startup requires Supabase, authenticated requests, deterministic non-mock decisions and non-mock notifications. Shared AWS Cost Explorer credentials are rejected until per-organization cloud credentials exist.
