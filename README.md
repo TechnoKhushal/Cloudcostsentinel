@@ -166,7 +166,7 @@ The five ordered migrations and deployment steps are documented in [Supabase set
 
 ## 7. Hosted Demo / Production Status
 
-For the explicit simulated Render + Vercel demo setup, follow [docs/DEMO_DEPLOYMENT.md](docs/DEMO_DEPLOYMENT.md). Do not use `ENVIRONMENT=development` for hosted Render. Production remains blocked until the migrations are applied and verified, tenant isolation and browser flows pass against an isolated project, organization-scoped cloud accounts and invitation/member management exist, and deployment configuration and production controls are verified.
+For the explicit simulated Render + Vercel demo setup, follow [docs/DEMO_DEPLOYMENT.md](docs/DEMO_DEPLOYMENT.md). Do not use `ENVIRONMENT=development` for hosted Render. Production remains blocked until the migrations are applied and verified, tenant isolation and browser flows pass against an isolated project, AWS role setup and live billing ingestion are exercised, and deployment configuration and production controls are verified. The current production model provisions one personal workspace per user; invitations and multi-member organization administration are not included.
 
 ---
 

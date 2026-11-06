@@ -20,7 +20,7 @@ export const ScenarioControls = ({ scenarios, selectedScenarioId, onSelectScenar
   <section className="scenario-toolbar" aria-label="Production cost analysis">
     <div className="scenario-select-group"><span className="status-pill">PRODUCTION · NO SAMPLE DATA</span><p className="empty-copy">Only connected cost telemetry is analyzed. Synthetic scenarios are disabled.</p></div>
     <div className="toolbar-buttons"><button type="button" className="btn btn-primary" onClick={onRunLiveAnalysis} disabled={loading || !costExplorerEnabled}><Cloud size={15} aria-hidden="true" />{loading ? "Analyzing…" : "Analyze AWS Cost Explorer"}</button></div>
-    {!costExplorerEnabled && <p className="inline-error">Organization-scoped AWS connections are not available yet. Live billing data cannot be connected safely in this deployment.</p>}
+    {!costExplorerEnabled && <p className="inline-error">Live AWS ingestion is disabled by the platform administrator. Contact support before connecting an AWS account.</p>}
   </section>
 ) : (
   <>
