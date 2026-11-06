@@ -59,7 +59,7 @@ begin
   on conflict (organization_id) do update set
     usage_day = (now() at time zone 'utc')::date,
     request_count = case when public.aws_cost_query_usage.usage_day = (now() at time zone 'utc')::date
-      then public.aws_cost_query_usage.request_count + 1 else 1 end,
+      then least(public.aws_cost_query_usage.request_count + 1, p_daily_limit + 1) else 1 end,
     updated_at = now()
   returning request_count into next_count;
   return next_count <= p_daily_limit;

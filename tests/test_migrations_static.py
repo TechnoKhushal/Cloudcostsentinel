@@ -36,5 +36,6 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "reserve_aws_cost_query" in customer_aws
     assert "workspace_finops_settings" in customer_aws
     assert "aws_cost_query_usage" in customer_aws
+    assert "least(public.aws_cost_query_usage.request_count + 1, p_daily_limit + 1)" in customer_aws
     assert "service_role" not in customer_aws
     assert "service_role" not in base + runtime + upgrade + customer_aws
