@@ -10,9 +10,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202610260001_initial_tenant_schema.sql",
         "202610260002_api_runtime.sql",
         "202610260003_membership_role_and_storage_cleanup.sql",
+        "202611070001_tenant_aws_role_connections.sql",
     ]
-    base, runtime, upgrade = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade):
+    base, runtime, upgrade, customer_aws = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -27,4 +28,13 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "grant execute on function public.persist_analysis_bundle(jsonb) to authenticated" in runtime
     assert "organization_members_role_check" in upgrade
     assert "report_objects_owner_delete" in upgrade
-    assert "service_role" not in base + runtime + upgrade
+    assert "alter table public.aws_account_connections enable row level security" in customer_aws
+    assert "aws_connections_admin_insert" in customer_aws
+    assert "aws_connections_admin_update" in customer_aws
+    assert "cloudcostsentinelreadonly" in customer_aws
+    assert "unique" in customer_aws and "external_id" in customer_aws
+    assert "reserve_aws_cost_query" in customer_aws
+    assert "workspace_finops_settings" in customer_aws
+    assert "aws_cost_query_usage" in customer_aws
+    assert "service_role" not in customer_aws
+    assert "service_role" not in base + runtime + upgrade + customer_aws

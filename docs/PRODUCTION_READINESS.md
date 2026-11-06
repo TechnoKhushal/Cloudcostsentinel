@@ -1,12 +1,12 @@
 # Production readiness and deployment configuration
 
-## Current state after Supabase code integration (2026-10-27)
+## Current state as of 2026-11-07
 
-The backend and frontend now include a Supabase Auth and user-JWT persistence implementation, but the code has **not** been connected to an applied Supabase schema. Live Render still reports `environment=demo`; Vercel still serves a prior built bundle. Therefore authenticated production remains **NOT READY**.
+**Authenticated production is NOT READY.** The live Render health endpoint currently reports `environment=demo`, `explicit_demo` authentication, SQLite persistence, a simulated decider, and AWS Cost Explorer disabled. Vercel's Stitch UI is live and currently consumes that shared synthetic API. This deployment is not suitable for customer billing data.
 
-Completed in source: Supabase backend repository and readiness check; personal workspace bootstrap; tenant-filtered PostgREST operations; atomic analysis/decision/approval/report metadata RPC; private report upload and short-lived signed download; profile read/update; frontend registration, login, email confirmation flow, password reset/recovery and logout; production startup guards; free-model-only OpenRouter validation; shared AWS credential rejection; lazy chart chunking; full backend test discovery in CI.
+The source includes Supabase Auth and caller-JWT/RLS persistence, private reports, single-user personal workspaces, AWS customer-role connection endpoints, generated per-workspace external IDs, budget/currency settings, and a durable per-workspace daily Cost Explorer query limit. A new SQL migration defines those AWS connection, quota and budget tables/policies/functions. **None of the four migrations have been verified against a live Supabase project**, and the new AWS connection has only mocked tests so far.
 
-Still required: apply and verify all three migrations on a dedicated Supabase project; test signing key configuration, RLS and Storage isolation using two test users; complete browser end-to-end checks; implement organization/member/invitation and cloud-account management, per-tenant AWS access, API quotas/rate limiting and report retention/deletion; verify actual Render/Vercel settings and deployed SHAs; validate production backups and recovery. See [Supabase setup](SUPABASE_SETUP.md) and [verification log](audit/VERIFICATION.md).
+Still required: apply/rehearse all four migrations; configure Supabase/Vercel/Render production variables and the platform's `sts:AssumeRole`-only IAM identity; validate the customer trust role and read-only policy with isolated AWS accounts; run two-user RLS and cost-query budget tests against Supabase; validate production backups/recovery and browser auth flows; and verify actual Render/Vercel settings. Signup currently provisions only personal workspaces; invitations/member management, subscription billing, retention/deletion and support/operations workflows are still absent. See [Supabase setup](SUPABASE_SETUP.md) and [verification log](audit/VERIFICATION.md).
 
 The remainder of this document records the earlier 2026-10-26 demo audit and its historical checks.
 

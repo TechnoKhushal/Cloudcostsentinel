@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from backend.config import Settings, parse_cors_origins, settings
 from backend.database.db import DatabaseRepository, ApprovalConflictError
-from backend.main import app, cost_explorer, db, lifespan
+from backend.main import AWSRoleConnectionRequest, WorkspaceFinOpsSettingsRequest, app, cost_explorer, db, lifespan
 from backend.models.approval import ApprovalItem
 from backend.models.cost import CostAnomaly, SpendMetrics
 from backend.services.cost_analyzer import calculate_spend_metrics, CostScenarioRegistry
@@ -640,8 +640,8 @@ def test_explicit_demo_configuration_is_safe_and_requires_exact_https_origin():
         ).validate_startup()
 
 
-def test_production_rejects_shared_aws_cost_explorer_credentials():
-    settings = Settings(
+def test_production_aws_cost_explorer_requires_assume_role_identity():
+    configuration = dict(
         ENVIRONMENT="production",
         AUTH_ENABLED=True,
         AUTH_AUDIENCE="authenticated",
@@ -652,8 +652,22 @@ def test_production_rejects_shared_aws_cost_explorer_credentials():
         NOTIFICATION_PROVIDER="disabled",
         AWS_COST_EXPLORER_ENABLED=True,
     )
-    with pytest.raises(ValueError, match="scoped to an organization"):
-        settings.validate_startup()
+    with pytest.raises(ValueError, match="sts:AssumeRole only"):
+        Settings(**configuration).validate_startup()
+    Settings(**configuration, AWS_ACCESS_KEY_ID="platform-access", AWS_SECRET_ACCESS_KEY="platform-secret").validate_startup()
+
+
+def test_production_role_connection_and_budget_inputs_are_strictly_validated():
+    valid = "arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly"
+    assert AWSRoleConnectionRequest(role_arn=valid).role_arn == valid
+    with pytest.raises(ValueError):
+        AWSRoleConnectionRequest(role_arn="arn:aws:iam::123456789012:role/Administrator")
+    settings = WorkspaceFinOpsSettingsRequest(monthly_budget=12000, currency="usd")
+    assert settings.currency == "USD"
+    with pytest.raises(ValueError):
+        WorkspaceFinOpsSettingsRequest(monthly_budget=0, currency="USD")
+    with pytest.raises(ValueError):
+        WorkspaceFinOpsSettingsRequest(monthly_budget=12000, currency="US Dollar")
 
 
 def test_render_refuses_implicit_development_and_accepts_explicit_demo(monkeypatch):
@@ -938,6 +952,18 @@ async def test_demo_analysis_rejects_live_or_custom_cost_inputs():
             )
     assert live.status_code == 403
     assert custom.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_production_analysis_rejects_unverified_custom_telemetry():
+    import unittest.mock
+
+    anomaly = CostScenarioRegistry.generate_scenario_anomaly("compute_spike")
+    with unittest.mock.patch.object(settings, "ENVIRONMENT", "production"), unittest.mock.patch.object(settings, "AUTH_ENABLED", False):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/api/analyze", json={"custom_anomaly": anomaly.model_dump(mode="json")})
+    assert response.status_code == 403
+    assert "verified telemetry" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

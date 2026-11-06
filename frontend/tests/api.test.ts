@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { ApiError, apiUrl, fetchAccountProfile, fetchApprovals, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision, updateAccountProfile } from "../src/api.ts";
+import { ApiError, apiUrl, connectAwsIntegration, disconnectAwsIntegration, fetchAccountProfile, fetchApprovals, fetchAwsIntegration, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision, updateAccountProfile, verifyAwsIntegration } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -134,5 +134,27 @@ test("account profile reads and updates use the authenticated profile endpoint",
   ]);
   assert.deepEqual(JSON.parse(String(calls[1].body)), { display_name: "FinOps lead" });
   assert.deepEqual(JSON.parse(String(calls[2].body)), { display_name: null });
+});
+
+test("AWS account integration uses the tenant-scoped authenticated endpoints", async () => {
+  const calls: Array<{ path: string; method: string; body: BodyInit | null | undefined }> = [];
+  const connection = { organization_id: "org-1", role_arn: "arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly", external_id: "a".repeat(32), account_id: "123456789012", status: "pending", verified_at: null, updated_at: "2026-01-01T00:00:00Z" };
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input)); calls.push({ path: url.pathname, method: init?.method ?? "GET", body: init?.body });
+    const payload = url.pathname.endsWith("/verify") ? { status: "connected", account_id: "123456789012", verified_at: "2026-01-01T00:00:00Z" }
+      : init?.method === "PUT" ? { connection, platform_principal_arn: "arn:aws:iam::000000000000:user/platform", instructions: "Set customer trust." }
+        : init?.method === "DELETE" ? { status: "disconnected" }
+      : { enabled: true, daily_query_limit: 20, connection, platform_principal_arn: "arn:aws:iam::000000000000:user/platform" };
+    return new Response(JSON.stringify(payload), { status: 200 });
+  };
+  assert.equal((await fetchAwsIntegration(undefined, production)).connection?.status, "pending");
+  await connectAwsIntegration(connection.role_arn, production);
+  await verifyAwsIntegration(production);
+  await disconnectAwsIntegration(production);
+  assert.deepEqual(calls.map(({ path, method }) => [path, method]), [
+    ["/api/integrations/aws", "GET"], ["/api/integrations/aws", "PUT"],
+    ["/api/integrations/aws/verify", "POST"], ["/api/integrations/aws", "DELETE"],
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[1].body)), { role_arn: connection.role_arn });
 });
 

@@ -2,13 +2,13 @@
 
 ## 1. Overview & Threat Model
 
-CloudCost Sentinel is a cloud cost decision-support application. Its default decision provider is simulated and reports use an offline deterministic template unless OpenRouter is configured. Supabase schema foundations exist, but the API is not tenant-scoped and should not receive private customer data.
+CloudCost Sentinel is a cloud cost decision-support application. Development/demo mode uses synthetic scenarios; production requires Supabase Auth, user-JWT PostgREST access, PostgreSQL RLS, and private report storage. Production live AWS ingestion uses customer-owned read-only IAM roles and short-lived STS credentials. **The migrations and production environment still require live-project application and verification; the deployed Render service is currently in explicit demo mode. Do not use it for private customer billing data until those gates pass.**
 
 ### Trust Boundaries
-1. **Frontend to API Gateway / Reverse Proxy**: Web client to FastAPI backend. Generic OIDC bearer validation exists for production; browser sign-in and tenant ownership are not complete.
+1. **Frontend to API**: Supabase Auth signs users in. The API verifies JWT signature, issuer, audience, and expiry, resolves the user's workspace, and carries the caller JWT to PostgREST so RLS applies to each query.
 2. **API Backend to Strands Decider**: In HTTP mode, calls `strands-decider serve` via typed REST SystemOne wire protocol.
 3. **API Backend to OpenRouter**: Optional bounded report generation with a backend-only key. Resource data is treated as untrusted evidence; no cloud credentials or mutation tools are provided to the model.
-4. **API Backend to AWS Cost Explorer**: Read-only (`ce:GetCostAndUsage`) telemetry collection.
+4. **API Backend to AWS**: A platform IAM identity with only `sts:AssumeRole` assumes a per-workspace `CloudCostSentinelReadOnly` role using a unique external ID. The customer role grants only `ce:GetCostAndUsage`; assumed credentials last 15 minutes. Queries avoid grouping and pagination, limiting each explicit analysis to one Cost Explorer request. AWS charges $0.01 per request.
 
 ---
 
@@ -26,11 +26,12 @@ CloudCost Sentinel is a cloud cost decision-support application. Its default dec
 ### Architecture
 - **Production Mode (`ENVIRONMENT=production`)**:
   - `AUTH_ENABLED=true` is required. Startup fails if OIDC/JWKS settings are missing. There is no authentication bypass.
-  - Validates JWT tokens against OIDC identity provider (AWS Cognito, Auth0, Okta, Keycloak).
+  - Validates Supabase JWT tokens against the configured issuer/JWKS.
   - Claims checked: `iss` (issuer), `aud` (audience), `exp` (expiration), signature verification via JWKS.
   - Role-Based Access Control:
-    - **`viewer`**: Can view telemetry, scenarios, decisions, and reports (`GET /api/decisions`, `GET /api/approvals`, `POST /api/analyze`).
-    - **`reviewer`**: Can approve or reject pending remediation recommendations (`POST /api/approvals/{id}/decision`).
+    - Workspace members can read data allowed by their role and trigger bounded cost analysis.
+    - Owners/admins manage AWS role connections and workspace budget settings.
+    - Reviewers may approve or reject internal review items; this never changes AWS resources.
 
 ### Development / Offline Mode
 - In `ENVIRONMENT=development` with `AUTH_ENABLED=false`:
@@ -42,8 +43,9 @@ CloudCost Sentinel is a cloud cost decision-support application. Its default dec
 - `ENVIRONMENT=demo` is an explicit shared public demo, not a tenant-secure production mode.
 - It requires the mock Decider, prohibits Cost Explorer and real notifications, accepts synthetic scenario IDs only, and marks the shared review queue as demo data. Reports use a clearly labeled deterministic fallback unless OpenRouter is explicitly configured.
 - Per-process limits do not coordinate across multiple replicas. Use one instance or add shared rate limiting before scaling.
-- SQLite needs a persistent mounted disk for records to survive redeploys. `DATABASE_URL` is rejected because PostgreSQL is not implemented. Supabase migration SQL is not connected to the API.
-- The frontend does not yet implement OIDC sign-in. Do not deploy it as an authenticated dashboard until that flow exists.
+- The shared demo uses SQLite and synthetic data. Demo-mode data is not tenant-isolated and must not contain customer records.
+- Supabase-authenticated workspace and AWS connection code exists, but the matching migrations must be applied and tested against a live Supabase project before production use.
+- Signup provisions a personal workspace. Workspace invitations, member management, organization switching, billing subscriptions, and retention/deletion workflows are still missing.
 
 ---
 
@@ -59,9 +61,9 @@ CloudCost Sentinel is a cloud cost decision-support application. Its default dec
 
 ## 5. Least-Privilege IAM Policies
 
-When deploying with live AWS integrations, use IAM roles for Amazon EC2 or ECS Task Execution roles instead of static long-lived credentials.
+The Render platform identity may use a rotatable key stored only in Render, with an identity policy limited to `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`. It must not have direct billing or resource mutation permissions. Each customer creates their own role with a unique per-workspace `sts:ExternalId` trust condition.
 
-### AWS Cost Explorer Least-Privilege Policy
+### Customer AWS Cost Explorer Role Permission
 ```json
 {
   "Version": "2012-10-17",
@@ -73,18 +75,12 @@ When deploying with live AWS integrations, use IAM roles for Amazon EC2 or ECS T
         "ce:GetCostAndUsage"
       ],
       "Resource": "*"
-    },
-    {
-      "Sid": "CallerIdentityForStatusCheck",
-      "Effect": "Allow",
-      "Action": [
-        "sts:GetCallerIdentity"
-      ],
-      "Resource": "*"
     }
   ]
 }
 ```
+
+The application returns the exact platform principal ARN and unique external ID for the customer's role trust relationship. Never request customer access keys; the backend uses 15-minute assumed-role credentials.
 
 Generative explanations use OpenRouter's API from the backend only. Leave `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` unset to avoid external generative calls. Select an available model and review its current pricing/data terms before enabling it.
 

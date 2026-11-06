@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from .auth import AuthenticatedPrincipal, require_reviewer, require_viewer
+from .auth import AuthenticatedPrincipal, require_admin, require_reviewer, require_viewer
 from .config import settings
 from .database.db import ApprovalConflictError, DatabaseRepository
 from .database.supabase import SupabaseRepository, SupabaseStoreError, supabase_repository
@@ -87,6 +87,8 @@ async def handle_supabase_store_error(request: Request, exc: SupabaseStoreError)
         return JSONResponse(status_code=403, content={"detail": "Workspace access denied."})
     if exc.status_code == 409:
         return JSONResponse(status_code=409, content={"detail": "The requested record conflicts with its current state."})
+    if exc.status_code == 429:
+        return JSONResponse(status_code=429, content={"detail": "Workspace AWS Cost Explorer request allowance is exhausted for today."})
     logger.warning("Supabase operation failed with status class %s.", str(exc.status_code)[:3])
     return JSONResponse(status_code=503, content={"detail": "Persistent storage is temporarily unavailable. Retry shortly."})
 
@@ -101,7 +103,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
     max_age=600,
 )
@@ -177,6 +179,31 @@ class ProfileUpdateRequest(BaseModel):
             return None
         value = value.strip()
         return value or None
+
+
+class AWSRoleConnectionRequest(BaseModel):
+    role_arn: str = Field(..., min_length=30, max_length=2048)
+
+    @field_validator("role_arn")
+    @classmethod
+    def validate_role_arn(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/CloudCostSentinelReadOnly", value):
+            raise ValueError("Use the dedicated CloudCostSentinelReadOnly role in the customer AWS account.")
+        return value
+
+
+class WorkspaceFinOpsSettingsRequest(BaseModel):
+    monthly_budget: float = Field(..., gt=0, le=1_000_000_000_000)
+    currency: str = Field(..., min_length=3, max_length=3)
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{3}", value):
+            raise ValueError("Currency must be a three-letter ISO code.")
+        return value
 
 
 # ------------------------------------------------------------------------------
@@ -264,12 +291,13 @@ async def get_health() -> Dict[str, Any]:
 async def get_health_ready(response: Response) -> Dict[str, Any]:
     """Readiness reflects local storage and required production provider state."""
     database_ready = await run_in_threadpool(db.check_ready)
+    aws_platform_ready = not cost_explorer.enabled or bool(await run_in_threadpool(cost_explorer.get_platform_principal_arn))
     decider_state = "simulated" if settings.DECIDER_PROVIDER == "mock" else "available" if settings.DECIDER_PROVIDER == "rules" else "configured_unverified"
     narrator_state = "configured_unverified" if settings.OPENROUTER_API_KEY else "offline"
     providers_ready = settings.ENVIRONMENT == "demo" or (
         decider_state in {"connected", "available"}
     )
-    ready = database_ready and providers_ready
+    ready = database_ready and providers_ready and aws_platform_ready
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
@@ -280,6 +308,7 @@ async def get_health_ready(response: Response) -> Dict[str, Any]:
             "persistence_provider": "supabase" if isinstance(db, SupabaseRepository) else "sqlite",
             "decider": decider_state,
             "narrator": narrator_state,
+            "aws_assume_role_identity": "not_required" if not cost_explorer.enabled else "available" if aws_platform_ready else "unavailable",
         },
     }
 
@@ -314,6 +343,78 @@ async def update_account_profile(
     return await run_in_threadpool(db.update_profile, req.display_name)
 
 
+@app.get("/api/workspace/finops-settings", tags=["Workspace"])
+async def get_workspace_finops_settings(principal: AuthenticatedPrincipal = Depends(require_viewer)) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="Persistent workspace settings require production Supabase storage.")
+    return {"budget": await run_in_threadpool(db.get_workspace_finops_settings)}
+
+
+@app.put("/api/workspace/finops-settings", tags=["Workspace"])
+async def update_workspace_finops_settings(req: WorkspaceFinOpsSettingsRequest,
+        principal: AuthenticatedPrincipal = Depends(require_admin)) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="Persistent workspace settings require production Supabase storage.")
+    return {"budget": await run_in_threadpool(db.update_workspace_finops_settings, req.monthly_budget, req.currency)}
+
+
+@app.get("/api/integrations/aws", tags=["Integrations"])
+async def get_aws_integration(principal: AuthenticatedPrincipal = Depends(require_admin)) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="AWS account connections require production Supabase storage.")
+    connection = await run_in_threadpool(db.get_aws_account_connection)
+    return {"enabled": cost_explorer.enabled, "daily_query_limit": settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT,
+            "connection": connection,
+            "platform_principal_arn": cost_explorer.get_platform_principal_arn() if cost_explorer.enabled else None}
+
+
+@app.put("/api/integrations/aws", tags=["Integrations"])
+async def connect_aws_integration(req: AWSRoleConnectionRequest,
+        principal: AuthenticatedPrincipal = Depends(require_admin)) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="AWS account connections require production Supabase storage.")
+    if not cost_explorer.enabled:
+        raise HTTPException(status_code=503, detail="Tenant-scoped AWS ingestion is disabled by platform configuration.")
+    match = re.match(r"^arn:[^:]+:iam::([0-9]{12}):role/", req.role_arn)
+    if not match:
+        raise HTTPException(status_code=422, detail="The AWS role ARN is invalid.")
+    existing = await run_in_threadpool(db.get_aws_account_connection)
+    external_id = existing["external_id"] if existing and existing["role_arn"] == req.role_arn else uuid.uuid4().hex
+    connection = await run_in_threadpool(db.save_aws_account_connection, req.role_arn, external_id, match.group(1))
+    platform_arn = await run_in_threadpool(cost_explorer.get_platform_principal_arn)
+    return {"connection": connection, "platform_principal_arn": platform_arn,
+            "instructions": "Add this platform principal and external ID to the customer role trust policy; attach only ce:GetCostAndUsage permissions, then run Verify connection."}
+
+
+@app.post("/api/integrations/aws/verify", tags=["Integrations"])
+async def verify_aws_integration(principal: AuthenticatedPrincipal = Depends(require_admin)) -> Dict[str, Any]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="AWS account connections require production Supabase storage.")
+    connection = await run_in_threadpool(db.get_aws_account_connection)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connect an AWS role before verifying it.")
+    if not cost_explorer.enabled:
+        raise HTTPException(status_code=503, detail="Tenant-scoped AWS ingestion is disabled by platform configuration.")
+    if not await run_in_threadpool(db.reserve_aws_cost_query, settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT):
+        raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
+    verified, error = await run_in_threadpool(cost_explorer.verify_connection,
+        connection["role_arn"], connection["external_id"], connection["account_id"].strip())
+    if not verified:
+        await run_in_threadpool(db.set_aws_account_connection_status, "pending", verified_at=None)
+        raise HTTPException(status_code=422, detail=error or "AWS role verification failed.")
+    verified_at = datetime.now(timezone.utc).isoformat()
+    await run_in_threadpool(db.set_aws_account_connection_status, "connected", verified_at=verified_at)
+    return {"status": "connected", "account_id": connection["account_id"].strip(), "verified_at": verified_at}
+
+
+@app.delete("/api/integrations/aws", tags=["Integrations"])
+async def disconnect_aws_integration(principal: AuthenticatedPrincipal = Depends(require_admin)) -> Dict[str, str]:
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="AWS account connections require production Supabase storage.")
+    await run_in_threadpool(db.delete_aws_account_connection)
+    return {"status": "disconnected"}
+
+
 # ------------------------------------------------------------------------------
 # Anomaly Analysis Flow
 # ------------------------------------------------------------------------------
@@ -334,12 +435,27 @@ async def analyze_anomaly(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Public demo accepts synthetic scenario IDs only; live or custom cost data is disabled.",
         )
+    if settings.ENVIRONMENT == "production" and req.custom_anomaly is not None:
+        raise HTTPException(status_code=403, detail="Production analysis accepts only verified telemetry from the connected customer AWS role.")
 
     # 1. Fetch telemetry
     cost_data_source = "synthetic_scenario"
     data_warnings: List[str] = []
     if req.use_aws_cost_explorer:
-        anomaly, err = cost_explorer.fetch_recent_costs()
+        if isinstance(db, SupabaseRepository):
+            finops_settings = await run_in_threadpool(db.get_workspace_finops_settings)
+            if not finops_settings:
+                raise HTTPException(status_code=409, detail="Set the workspace monthly budget and currency before running a real AWS analysis.")
+            connection = await run_in_threadpool(db.get_aws_account_connection)
+            if not connection or connection.get("status") != "connected":
+                raise HTTPException(status_code=409, detail="Connect and verify an AWS Cost Explorer role for this workspace before analysis.")
+            if not await run_in_threadpool(db.reserve_aws_cost_query, settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT):
+                raise HTTPException(status_code=429, detail="Workspace AWS Cost Explorer request allowance is exhausted for today.")
+            anomaly, err = await run_in_threadpool(cost_explorer.fetch_recent_costs,
+                14, float(finops_settings["monthly_budget"]), connection["role_arn"],
+                connection["external_id"], connection["account_id"].strip(), finops_settings["currency"])
+        else:
+            anomaly, err = await run_in_threadpool(cost_explorer.fetch_recent_costs)
         cost_data_source = "aws_cost_explorer"
         if err and err.startswith("PARTIAL_DATA:") and anomaly is not None:
             data_warnings.append(err)
@@ -354,7 +470,7 @@ async def analyze_anomaly(
         anomaly = req.custom_anomaly
     else:
         if settings.ENVIRONMENT == "production":
-            raise HTTPException(status_code=400, detail="Synthetic scenarios are disabled in production. Connect Cost Explorer or submit validated cost telemetry.")
+            raise HTTPException(status_code=400, detail="Synthetic scenarios are disabled in production. Connect a verified AWS Cost Explorer role for this workspace.")
         scenario_id = req.scenario_id or "compute_spike"
         valid_ids = [s["id"] for s in CostScenarioRegistry.get_all_scenarios()]
         if scenario_id not in valid_ids:

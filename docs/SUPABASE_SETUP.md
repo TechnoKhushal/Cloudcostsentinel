@@ -8,9 +8,9 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 
 1. Create a dedicated Supabase project. Enable email/password authentication and email verification. Configure allowed redirect URLs to the exact Vercel site and local development URL.
 2. Set an asymmetric Supabase JWT signing key (RS256 or ES256) and note the project's URL and publishable/anon key. The backend verifies asymmetric JWTs using the Supabase JWKS endpoint.
-3. Back up the project if it contains data. Apply `supabase/migrations/202610260001_initial_tenant_schema.sql`, `supabase/migrations/202610260002_api_runtime.sql`, and `supabase/migrations/202610260003_membership_role_and_storage_cleanup.sql` in order, using the Supabase SQL editor or CLI. Keep each applied migration recorded; never edit an already applied migration in place.
-4. Inspect the created tables, functions, RLS policies, private `sentinel-reports` bucket, file size limit and MIME allowlist. Run adversarial tests with two isolated accounts and verify cross-workspace reads, writes, approvals, object downloads and deletes fail.
-5. Configure the frontend and backend variables below. Deploy API and frontend only after migration and account-flow checks pass.
+3. Back up the project if it contains data. Apply the four migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, and `202611070001_tenant_aws_role_connections.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
+4. Inspect the tables, functions, RLS policies, private `sentinel-reports` bucket, `aws_account_connections`, durable per-workspace query counters, and workspace budget table. Run adversarial tests with two isolated accounts and verify cross-workspace reads, writes, approvals, AWS connections, budgets, object downloads and deletes fail.
+5. Configure the frontend and backend variables below. Deploy API and frontend only after migration, AWS role trust, and account-flow checks pass.
 
 ## Environment variables
 
@@ -36,16 +36,30 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 | `NOTIFICATION_PROVIDER` | Yes | `disabled` until a real, separately reviewed notification integration is configured. `mock` is blocked in production. |
 | `OPENROUTER_API_KEY` | No | Optional backend-only key. Omit to use the deterministic explanation. |
 | `OPENROUTER_MODEL` | No | Required only with the key. Must be `openrouter/free` or an explicitly free model ID ending in `:free`; no paid fallback is allowed. Free availability, caps and pricing can change. |
-| `AWS_COST_EXPLORER_ENABLED` | Yes | `false` for now. Production startup rejects `true` because one set of server AWS credentials would cross tenant boundaries. Per-organization AWS role connections are not implemented. |
+| `AWS_COST_EXPLORER_ENABLED` | Yes for live AWS ingestion | `true` to enable the customer-owned IAM role workflow. Production requires the platform AWS identity below when enabled. |
+| `AWS_ACCESS_KEY_ID` | Required when AWS ingestion is enabled | Platform IAM user access key with only `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`; store as a Render secret. It must not have Cost Explorer or resource mutation permissions. |
+| `AWS_SECRET_ACCESS_KEY` | Required when AWS ingestion is enabled | Matching platform IAM secret key. Never set it in Vercel or a `VITE_*` variable. |
+| `AWS_SESSION_TOKEN` | No | Only for a temporary platform credential set. |
+| `AWS_REGION` | No | Cost Explorer endpoint region; defaults to `us-east-1`. |
+| `AWS_COST_EXPLORER_DAILY_QUERY_LIMIT` | No | Durable per-workspace daily cap; defaults to 20 and allows 1–1000. Each query is one AWS Cost Explorer API request. |
 
-`AUTH_ISSUER`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL` may be omitted for Supabase; the API derives them from `SUPABASE_URL` and uses audience `authenticated`. `PORT` is provided by Render. Do not set `DATABASE_PATH`, `DATABASE_URL`, service-role keys, AWS credentials, or secrets with a `VITE_` prefix for production.
+`AUTH_ISSUER`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL` may be omitted for Supabase; the API derives them from `SUPABASE_URL` and uses audience `authenticated`. `PORT` is provided by Render. Do not set `DATABASE_PATH`, `DATABASE_URL`, Supabase service-role keys, customer AWS keys, or secrets with a `VITE_` prefix for production.
+
+## AWS customer account connection
+
+1. Set `AWS_COST_EXPLORER_ENABLED=true` only after the Render platform identity has an IAM policy allowing `sts:AssumeRole` on `arn:aws:iam::*:role/CloudCostSentinelReadOnly`. The platform key belongs in Render's secret store and has no direct Cost Explorer permissions.
+2. In the authenticated workspace, an owner/admin saves the customer's role ARN. The API creates a distinct random external ID per workspace. Use the exact platform principal ARN and external ID shown by the application in the role trust relationship.
+3. Attach only `ce:GetCostAndUsage` to the customer's `CloudCostSentinelReadOnly` role. Verify from the app. Verification itself calls Cost Explorer once.
+4. Save a monthly workspace budget and currency in Settings. Analysis is blocked until the budget currency matches AWS's returned billing currency.
+
+AWS currently charges **$0.01 per Cost Explorer API request**; each page is billed separately. The app avoids service-level grouping and pagination and limits each explicit analysis to a single request. The verification dialog shows this cost and the default durable limit is 20 requests per workspace per UTC day. [AWS Cost Explorer pricing](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/pricing/). The unique external ID protects against the confused-deputy problem; AWS notes it is an identifier, not a secret. [AWS third-party role guidance](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html).
 
 ## Upgrade, recovery, and retention
 
 - Apply migrations in order and retain the migration history in source control. Use a disposable project to rehearse upgrades and rollback/recovery before production.
 - Back up the Supabase database using the project's supported backup/export method before migrations. Restore to a separate project and verify row counts and report objects before promoting it.
 - The app has no SQLite-to-Supabase import utility. Existing SQLite records are not migrated automatically; preserve and explicitly reconcile them before switching any users.
-- Reports are JSON files in a private bucket at `<organization UUID>/<report ID>.json`. The API uploads before its transactionally persisted metadata bundle; on a failed database write it attempts object deletion. Downloads require an organization-filtered metadata lookup and use a short-lived signed URL. A periodic orphan/retention cleanup job, user deletion workflow, malware scanning, invitations, organization management and general-purpose uploads are not implemented.
+- Reports are JSON files in a private bucket at `<organization UUID>/<report ID>.json`. The API uploads before its transactionally persisted metadata bundle; on a failed database write it attempts object deletion. Downloads require an organization-filtered metadata lookup and use a short-lived signed URL. A periodic orphan/retention cleanup job, user deletion workflow, malware scanning, invitations, organization switching/member administration, paid-plan billing, and general-purpose uploads are not implemented. Signup currently provisions one personal workspace per user.
 - Audit events for the current analysis persistence RPC are append-only for ordinary authenticated users. Broader membership, account, deletion and export auditing still needs implementation.
 
 ## Before production

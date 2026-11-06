@@ -76,6 +76,49 @@ def test_read_query_is_explicitly_tenant_scoped_and_uses_caller_jwt():
     assert "service-role" not in request.headers["authorization"]
 
 
+def test_aws_connection_upsert_is_bound_to_the_current_workspace_and_token():
+    org_id, user_id = str(uuid4()), str(uuid4())
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer caller-token"
+        assert request.url.path == "/rest/v1/aws_account_connections"
+        assert request.url.params["on_conflict"] == "organization_id"
+        body = json.loads(request.content)
+        assert body["organization_id"] == org_id
+        assert body["updated_by"] == user_id
+        return httpx.Response(201, json=[{"organization_id": org_id, "account_id": "123456789012", "status": "pending"}])
+
+    repo = _repository(handler)
+    token = repo.set_scope(RequestScope(user_id, org_id, "owner", "caller-token"))
+    try:
+        row = repo.save_aws_account_connection("arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly", "a" * 32, "123456789012")
+    finally:
+        repo.reset_scope(token)
+        repo.close()
+    assert row["status"] == "pending"
+    assert len(requests) == 1
+
+
+def test_durable_aws_api_budget_calls_atomic_workspace_rpc():
+    org_id, user_id = str(uuid4()), str(uuid4())
+
+    def handler(request):
+        assert request.headers["authorization"] == "Bearer caller-token"
+        assert request.url.path == "/rest/v1/rpc/reserve_aws_cost_query"
+        assert json.loads(request.content) == {"p_organization_id": org_id, "p_daily_limit": 20}
+        return httpx.Response(200, json=True)
+
+    repo = _repository(handler)
+    token = repo.set_scope(RequestScope(user_id, org_id, "owner", "caller-token"))
+    try:
+        assert repo.reserve_aws_cost_query(20) is True
+    finally:
+        repo.reset_scope(token)
+        repo.close()
+
+
 def test_report_download_requires_tenant_metadata_and_returns_short_lived_signed_url():
     org_id, user_id = str(uuid4()), str(uuid4())
     path = f"{org_id}/rpt-safe_001.json"

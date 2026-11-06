@@ -147,6 +147,23 @@ export interface AccountProfile {
   updated_at?: string | null;
 }
 
+export interface AwsAccountConnection {
+  organization_id: string;
+  role_arn: string;
+  external_id: string;
+  account_id: string;
+  status: "pending" | "connected" | "error";
+  verified_at: string | null;
+  updated_at: string;
+}
+export interface AwsIntegration {
+  enabled: boolean;
+  daily_query_limit: number;
+  connection: AwsAccountConnection | null;
+  platform_principal_arn: string | null;
+}
+export interface WorkspaceFinOpsSettings { budget: { monthly_budget: number; currency: string; updated_at: string } | null }
+
 export async function fetchAccountProfile(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<AccountProfile> {
   const value: unknown = await requestJson("/api/account/profile", { signal }, "Loading account profile", environment);
   if (!isObject(value) || typeof value.user_id !== "string" || !(value.display_name === null || typeof value.display_name === "string")
@@ -166,6 +183,36 @@ export async function updateAccountProfile(displayName: string, signal?: AbortSi
     throw new ApiError("The profile endpoint returned an unexpected response shape.", { endpoint: "/api/account/profile" });
   }
   return value as unknown as AccountProfile;
+}
+
+export async function fetchAwsIntegration(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<AwsIntegration> {
+  const result = await requestJson<AwsIntegration>("/api/integrations/aws", { signal }, "Loading AWS connection", environment);
+  if (typeof result.enabled !== "boolean" || typeof result.daily_query_limit !== "number" || !(result.connection === null || typeof result.connection?.role_arn === "string")) {
+    throw new ApiError("The AWS integration endpoint returned an unexpected response shape.", { endpoint: "/api/integrations/aws" });
+  }
+  return result;
+}
+
+export async function connectAwsIntegration(roleArn: string, environment: BuildEnvironment | undefined = import.meta.env): Promise<{ connection: AwsAccountConnection; platform_principal_arn: string | null; instructions: string }> {
+  return requestJson("/api/integrations/aws", { method: "PUT", body: JSON.stringify({ role_arn: roleArn }) }, "Saving AWS role connection", environment);
+}
+
+export async function verifyAwsIntegration(environment: BuildEnvironment | undefined = import.meta.env): Promise<{ status: "connected"; account_id: string; verified_at: string }> {
+  return requestJson("/api/integrations/aws/verify", { method: "POST", body: JSON.stringify({}) }, "Verifying AWS Cost Explorer access", environment);
+}
+
+export async function disconnectAwsIntegration(environment: BuildEnvironment | undefined = import.meta.env): Promise<{ status: "disconnected" }> {
+  return requestJson("/api/integrations/aws", { method: "DELETE" }, "Removing AWS role connection", environment);
+}
+
+export async function fetchWorkspaceFinOpsSettings(signal?: AbortSignal): Promise<WorkspaceFinOpsSettings> {
+  return requestJson<WorkspaceFinOpsSettings>("/api/workspace/finops-settings", { signal }, "Loading workspace budget");
+}
+
+export async function updateWorkspaceFinOpsSettings(monthlyBudget: number, currency: string): Promise<WorkspaceFinOpsSettings> {
+  return requestJson<WorkspaceFinOpsSettings>("/api/workspace/finops-settings", {
+    method: "PUT", body: JSON.stringify({ monthly_budget: monthlyBudget, currency }),
+  }, "Saving workspace budget");
 }
 
 export async function fetchScenarios(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<Scenario[]> {

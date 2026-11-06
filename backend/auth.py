@@ -216,3 +216,17 @@ async def require_reviewer(
     finally:
         if scope_token is not None:
             supabase_repository.reset_scope(scope_token)
+
+
+async def require_admin(
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+) -> AsyncIterator[AuthenticatedPrincipal]:
+    """Requires an organization owner or admin for account integrations."""
+    scope_token = await _resolve_workspace(principal)
+    try:
+        if not principal.has_role("admin"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: workspace administrator role required.")
+        yield principal
+    finally:
+        if scope_token is not None:
+            supabase_repository.reset_scope(scope_token)

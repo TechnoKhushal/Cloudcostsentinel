@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,87 +41,111 @@ class AWSCostExplorerService:
             return {
                 "enabled": False,
                 "status": "disabled_by_configuration",
-                "message": "AWS Cost Explorer is disabled by default. Set AWS_COST_EXPLORER_ENABLED=true to enable.",
+                "message": "AWS Cost Explorer is disabled until customer-owned, read-only role connections are enabled.",
                 "region": self.region_name,
             }
         return {
             "enabled": True,
             "status": "configured_unverified",
-            "message": "Cost Explorer credentials and read permissions are verified only by an actual cost query.",
+            "message": "Customer-owned IAM role connections use temporary credentials; verify each workspace before ingestion.",
             "region": self.region_name,
+            "daily_query_limit": settings.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT,
         }
 
+    @staticmethod
+    def _assume_customer_role(role_arn: str, external_id: str):
+        """Assume a customer-owned role; the platform identity only needs sts:AssumeRole."""
+        base_sts = boto3.client("sts", region_name="us-east-1",
+            config=Config(connect_timeout=3, read_timeout=8, retries={"max_attempts": 1, "mode": "standard"}))
+        result = base_sts.assume_role(RoleArn=role_arn, RoleSessionName="CloudCostSentinelReadOnly", ExternalId=external_id, DurationSeconds=900)
+        credentials = result["Credentials"]
+        session = boto3.Session(aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"], aws_session_token=credentials["SessionToken"])
+        identity = session.client("sts", region_name="us-east-1",
+            config=Config(connect_timeout=3, read_timeout=8, retries={"max_attempts": 1, "mode": "standard"})).get_caller_identity()
+        return session, identity
+
+    @staticmethod
+    def get_platform_principal_arn() -> Optional[str]:
+        try:
+            return boto3.client("sts", region_name="us-east-1",
+                config=Config(connect_timeout=3, read_timeout=8, retries={"max_attempts": 1, "mode": "standard"})).get_caller_identity().get("Arn")
+        except Exception as exc:
+            logger.warning("AWS platform identity check failed (%s).", type(exc).__name__)
+            return None
+
+    def verify_connection(self, role_arn: str, external_id: str, expected_account_id: str) -> tuple[bool, Optional[str]]:
+        """Verify the external ID, role trust, account identity, and CE read permission."""
+        if not self.enabled:
+            return False, "AWS Cost Explorer ingestion is disabled by platform configuration."
+        try:
+            session, identity = self._assume_customer_role(role_arn, external_id)
+            if identity.get("Account") != expected_account_id:
+                return False, "The assumed AWS role belongs to a different account than the configured role ARN."
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=1)
+            session.client("ce", region_name=self.region_name,
+                config=Config(connect_timeout=3, read_timeout=8, retries={"max_attempts": 1, "mode": "standard"})).get_cost_and_usage(
+                    TimePeriod={"Start": start_date.isoformat(), "End": end_date.isoformat()},
+                    Granularity="DAILY", Metrics=["UnblendedCost"])
+            return True, None
+        except (NoCredentialsError, PartialCredentialsError):
+            return False, "The platform AWS AssumeRole identity is not configured."
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "AWSAccessError")
+            return False, f"AWS role verification failed ({str(code)[:80]}). Check the role trust and read-only Cost Explorer policy."
+        except Exception as exc:
+            logger.warning("AWS role verification failed (%s).", type(exc).__name__)
+            return False, "AWS role verification is temporarily unavailable."
+
     def fetch_recent_costs(
-        self, days: int = 14, monthly_budget: float = 10000.0
+        self, days: int = 14, monthly_budget: float = 10000.0,
+        role_arn: Optional[str] = None, external_id: Optional[str] = None,
+        expected_account_id: Optional[str] = None, budget_currency: Optional[str] = None,
     ) -> Tuple[Optional[CostAnomaly], Optional[str]]:
-        """Fetch cost telemetry from AWS Cost Explorer with read-only permissions."""
+        """Fetch a bounded daily account-total series through a tenant's read-only role.
+
+        The query deliberately avoids service-level grouping and pagination so one
+        explicit analysis incurs at most one paid Cost Explorer API request.
+        """
         if not self.enabled:
             return None, "AWS Cost Explorer is disabled in configuration."
+        if not role_arn or not external_id or not expected_account_id:
+            return None, "This workspace has no complete AWS role connection. Configure and verify it first."
 
         try:
-            client = boto3.client(
-                "ce",
-                region_name=self.region_name,
-                config=Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"}),
-            )
+            session, identity = self._assume_customer_role(role_arn, external_id)
+            if identity.get("Account") != expected_account_id:
+                return None, "The connected AWS role account could not be verified. Reconnect the customer role."
+            client = session.client("ce", region_name=self.region_name,
+                config=Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 1, "mode": "standard"}))
             now_utc = datetime.now(timezone.utc)
             # TimePeriod.End is exclusive in Cost Explorer API.
             # Daily billing metrics typically lag by 24-48 hours.
             end_date = now_utc.date()
             start_date = end_date - timedelta(days=days)
 
-            results_by_time: List[Dict[str, Any]] = []
-            next_page_token: Optional[str] = None
-            pagination_cap_hit = False
-
-            # Bounded pagination loop (max 5 pages for safety)
-            for _ in range(5):
-                params: Dict[str, Any] = {
-                    "TimePeriod": {
-                        "Start": start_date.strftime("%Y-%m-%d"),
-                        "End": end_date.strftime("%Y-%m-%d"),
-                    },
-                    "Granularity": "DAILY",
-                    "Metrics": ["UnblendedCost"],
-                    "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
-                }
-                if next_page_token:
-                    params["NextPageToken"] = next_page_token
-
-                response = client.get_cost_and_usage(**params)
-                results_by_time.extend(response.get("ResultsByTime", []))
-                next_page_token = response.get("NextPageToken")
-                if not next_page_token:
-                    break
-            else:
-                # Loop exhausted all 5 pages but more data remains
-                if next_page_token:
-                    pagination_cap_hit = True
-                    logger.warning(
-                        "AWS Cost Explorer pagination cap (5 pages) reached; "
-                        "cost data may be incomplete. Increase days range or reduce granularity."
-                    )
+            response = client.get_cost_and_usage(TimePeriod={"Start": start_date.isoformat(), "End": end_date.isoformat()},
+                Granularity="DAILY", Metrics=["UnblendedCost"])
+            results_by_time = response.get("ResultsByTime", [])
+            pagination_cap_hit = bool(response.get("NextPageToken"))
 
             if not results_by_time:
                 return None, "No cost data returned by AWS Cost Explorer for specified period."
 
-            # Organize daily totals and per-service breakdown
+            # Account-level daily totals. Service grouping would paginate and
+            # create additional billable API requests; keep this bounded.
             daily_totals: Dict[str, float] = {}
-            service_cumulative: Dict[str, float] = {}
+            currency = "USD"
 
             for item in results_by_time:
                 date_key = item.get("TimePeriod", {}).get("Start", "")
-                day_total = 0.0
-                for group in item.get("Groups", []):
-                    keys = group.get("Keys", [])
-                    service_name = keys[0] if keys else "Unknown Service"
-                    amount = float(group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0))
-                    # Ignore negative adjustments/credits for baseline spend calculations
-                    valid_amount = max(0.0, amount)
-                    day_total += valid_amount
-                    service_cumulative[service_name] = service_cumulative.get(service_name, 0.0) + valid_amount
+                metric = item.get("Total", {}).get("UnblendedCost", {})
+                currency = metric.get("Unit", currency)
+                daily_totals[date_key] = round(max(0.0, float(metric.get("Amount", 0.0))), 2)
 
-                daily_totals[date_key] = round(day_total, 2)
+            if budget_currency and currency.upper() != budget_currency.upper():
+                return None, f"AWS billing currency {currency} does not match the workspace budget currency {budget_currency}. Update the workspace budget currency before analysis."
 
             data_points = list(daily_totals.values())
             current_day = now_utc.day
@@ -133,11 +158,7 @@ class AWSCostExplorerService:
                 days_in_month=days_in_current_month,
             )
 
-            # Identify top contributing service
-            top_service = "All AWS Services"
-            if service_cumulative:
-                sorted_services = sorted(service_cumulative.items(), key=lambda x: x[1], reverse=True)
-                top_service = sorted_services[0][0]
+            account_label = f"AWS account {expected_account_id}"
 
             time_series = [
                 CostDataPoint(
@@ -145,23 +166,23 @@ class AWSCostExplorerService:
                     spend=amt,
                     baseline=metrics.baseline_spend,
                     is_anomaly=(amt >= metrics.baseline_spend * 1.2),
-                    service=top_service,
+                    service=account_label,
                     environment="production",
                 )
                 for dt, amt in daily_totals.items()
             ]
 
             anomaly = CostAnomaly(
-                anomaly_id=f"ce-live-{end_date.strftime('%Y-%m-%d')}",
+                anomaly_id=f"ce-live-{end_date.strftime('%Y-%m-%d')}-{uuid.uuid4().hex[:12]}",
                 scenario_id="aws_live",
-                scenario_name=f"Live AWS Cost Explorer ({top_service})",
-                service=top_service,
+                scenario_name=f"Live AWS Cost Explorer ({expected_account_id})",
+                service=account_label,
                 environment="production",
                 owner="unknown",  # Honestly unassigned; never invent verified owner from CE aggregate
                 criticality="high" if metrics.anomaly_detected else "medium",
                 metrics=metrics,
                 time_series=time_series,
-                currency="USD",
+                currency=currency,
                 detected_at=now_utc.isoformat(),
                 is_simulated=False,
             )

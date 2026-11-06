@@ -106,6 +106,9 @@ class Settings(BaseModel):
     AWS_COST_EXPLORER_TIMEZONE: str = Field(
         default_factory=lambda: os.getenv("AWS_COST_EXPLORER_TIMEZONE", "UTC")
     )
+    AWS_COST_EXPLORER_DAILY_QUERY_LIMIT: int = Field(
+        default_factory=lambda: int(os.getenv("AWS_COST_EXPLORER_DAILY_QUERY_LIMIT", "20"))
+    )
 
     # Notification Provider Settings ("disabled" | "mock" | "sns" | "ses")
     NOTIFICATION_PROVIDER: str = Field(
@@ -140,6 +143,8 @@ class Settings(BaseModel):
             raise ValueError("Render deployment requires HOST=0.0.0.0.")
         if not (0.0 < self.DECIDER_MIN_CONFIDENCE <= 1.0):
             raise ValueError(f"DECIDER_MIN_CONFIDENCE must be between 0.0 and 1.0; got {self.DECIDER_MIN_CONFIDENCE}")
+        if not (1 <= self.AWS_COST_EXPLORER_DAILY_QUERY_LIMIT <= 1000):
+            raise ValueError("AWS_COST_EXPLORER_DAILY_QUERY_LIMIT must be between 1 and 1000.")
 
         # 'inprocess' removed — it raises NotImplementedError and must not be allowed.
         allowed_deciders = {"mock", "rules", "http"}
@@ -207,10 +212,11 @@ class Settings(BaseModel):
                 raise ValueError("Production startup prohibits simulated notifications; use disabled or a verified provider.")
 
             if self.AWS_COST_EXPLORER_ENABLED:
-                raise ValueError(
-                    "Production AWS Cost Explorer is blocked until cloud credentials are scoped to an organization; "
-                    "shared backend credentials would expose one billing account to every tenant."
-                )
+                if not self.AWS_ACCESS_KEY_ID or not self.AWS_SECRET_ACCESS_KEY:
+                    raise ValueError(
+                        "Tenant-scoped AWS Cost Explorer requires a platform IAM identity with sts:AssumeRole only. "
+                        "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the backend secret store."
+                    )
 
         if self.ENVIRONMENT == "demo":
             self._validate_public_origins()

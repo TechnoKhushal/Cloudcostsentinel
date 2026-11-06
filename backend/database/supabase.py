@@ -202,6 +202,63 @@ class SupabaseRepository:
         return {"user_id": scope.user_id, "display_name": None, "organization_id": scope.organization_id,
                 "role": scope.role, "created_at": None, "updated_at": None}
 
+    def get_aws_account_connection(self) -> Optional[dict[str, Any]]:
+        scope = self._current_scope()
+        rows = self._request("GET", "aws_account_connections",
+            params={"select": "organization_id,role_arn,external_id,account_id,status,verified_at,updated_at",
+                    "organization_id": f"eq.{scope.organization_id}", "limit": "1"}, token=scope.access_token) or []
+        return rows[0] if rows else None
+
+    def save_aws_account_connection(self, role_arn: str, external_id: str, account_id: str) -> dict[str, Any]:
+        scope = self._current_scope()
+        rows = self._request("POST", "aws_account_connections",
+            params={"on_conflict": "organization_id", "select": "organization_id,role_arn,external_id,account_id,status,verified_at,updated_at"},
+            body={"organization_id": scope.organization_id, "role_arn": role_arn, "external_id": external_id,
+                  "account_id": account_id, "status": "pending", "verified_at": None, "updated_by": scope.user_id},
+            token=scope.access_token, prefer="resolution=merge-duplicates,return=representation") or []
+        if not rows:
+            raise SupabaseStoreError()
+        return rows[0]
+
+    def set_aws_account_connection_status(self, status: str, *, verified_at: Optional[str] = None) -> None:
+        scope = self._current_scope()
+        self._request("PATCH", "aws_account_connections",
+            params={"organization_id": f"eq.{scope.organization_id}"},
+            body={"status": status, "verified_at": verified_at, "updated_by": scope.user_id}, token=scope.access_token,
+            prefer="return=minimal")
+
+    def delete_aws_account_connection(self) -> None:
+        scope = self._current_scope()
+        self._request("DELETE", "aws_account_connections",
+            params={"organization_id": f"eq.{scope.organization_id}"}, token=scope.access_token,
+            prefer="return=minimal")
+
+    def reserve_aws_cost_query(self, daily_limit: int) -> bool:
+        scope = self._current_scope()
+        result = self._request("POST", "rpc/reserve_aws_cost_query", token=scope.access_token,
+            body={"p_organization_id": scope.organization_id, "p_daily_limit": daily_limit})
+        if not isinstance(result, bool):
+            raise SupabaseStoreError()
+        return result
+
+    def get_workspace_finops_settings(self) -> Optional[dict[str, Any]]:
+        scope = self._current_scope()
+        rows = self._request("GET", "workspace_finops_settings",
+            params={"select": "monthly_budget,currency,updated_at", "organization_id": f"eq.{scope.organization_id}", "limit": "1"},
+            token=scope.access_token) or []
+        return rows[0] if rows else None
+
+    def update_workspace_finops_settings(self, monthly_budget: float, currency: str) -> dict[str, Any]:
+        scope = self._current_scope()
+        rows = self._request("POST", "workspace_finops_settings",
+            params={"on_conflict": "organization_id", "select": "monthly_budget,currency,updated_at"},
+            body={"organization_id": scope.organization_id, "monthly_budget": monthly_budget,
+                  "currency": currency, "updated_by": scope.user_id}, token=scope.access_token,
+            prefer="resolution=merge-duplicates,return=representation") or []
+        if not rows:
+            raise SupabaseStoreError()
+        return rows[0]
+
     def update_profile(self, display_name: Optional[str]) -> dict[str, Any]:
         scope = self._current_scope()
         rows = self._request("POST", "profiles", token=scope.access_token,
