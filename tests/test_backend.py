@@ -341,6 +341,24 @@ async def test_api_analyze_compute_spike_flow():
 
 
 @pytest.mark.asyncio
+async def test_latest_analysis_endpoint_restores_persisted_dashboard_bundle():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        analyzed = await ac.post("/api/analyze", json={"scenario_id": "stable_baseline"})
+        assert analyzed.status_code == 200
+        result = analyzed.json()
+        restored = await ac.get("/api/analysis/latest")
+    assert restored.status_code == 200
+    payload = restored.json()
+    assert payload["anomaly"]["anomaly_id"] == result["anomaly"]["anomaly_id"]
+    assert payload["decision"]["decision_id"] == result["decision"]["decision_id"]
+    assert payload["report"]["report_id"] == result["report"]["report_id"]
+    assert payload["cost_data_source"] == "synthetic_scenario"
+    assert payload["partial_data"] is False
+    assert payload["data_warnings"] == []
+
+
+@pytest.mark.asyncio
 async def test_api_decider_systemone_wire_protocol():
     """Test fixture endpoint must be disabled by default (returns 404).
     When ENABLE_TEST_FIXTURE_ENDPOINT=true, it should serve valid Strands wire-protocol responses.

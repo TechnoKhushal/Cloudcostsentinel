@@ -129,6 +129,37 @@ const isApproval = (item: unknown): item is ApprovalItem => isObject(item)
 const isDecision = (item: unknown): item is DeciderResponseTrace => isObject(item)
   && typeof item.decision_id === "string" && ["monitor", "notify_owner", "request_approval"].includes(String(item.action))
   && typeof item.timestamp === "string" && typeof item.provider === "string";
+const isAnomaly = (item: unknown): item is CostAnomaly => isObject(item)
+  && typeof item.anomaly_id === "string" && typeof item.service === "string"
+  && isObject(item.metrics) && Array.isArray(item.time_series) && typeof item.is_simulated === "boolean";
+const isReport = (item: unknown): item is InvestigationReport => isObject(item)
+  && typeof item.report_id === "string" && typeof item.anomaly_id === "string"
+  && typeof item.decision_id === "string" && Array.isArray(item.observed_facts)
+  && Array.isArray(item.safe_recommendations);
+
+export interface LatestAnalysis {
+  anomaly: CostAnomaly;
+  decision: DeciderResponseTrace;
+  report: InvestigationReport;
+  approval: ApprovalItem | null;
+  is_simulated: boolean;
+  cost_data_source: string;
+  partial_data: boolean;
+  data_warnings: string[];
+}
+
+export async function fetchLatestAnalysis(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<LatestAnalysis | null> {
+  const value: unknown = await requestJson("/api/analysis/latest", { signal }, "Restoring latest analysis", environment);
+  if (value === null) return null;
+  if (!isObject(value) || !isAnomaly(value.anomaly) || !isDecision(value.decision) || !isReport(value.report)
+    || !(value.approval === null || isApproval(value.approval)) || typeof value.is_simulated !== "boolean"
+    || typeof value.cost_data_source !== "string" || typeof value.partial_data !== "boolean"
+    || !Array.isArray(value.data_warnings) || !value.data_warnings.every((warning) => typeof warning === "string")) {
+    throw new ApiError("The backend returned an unexpected response for /api/analysis/latest.", { endpoint: "/api/analysis/latest" });
+  }
+  return value as unknown as LatestAnalysis;
+}
+
 export async function fetchHealth(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<HealthInfo> {
   const value: unknown = await requestJson("/api/health", { signal }, "Health check", environment);
   if (!isObject(value) || typeof value.environment !== "string" || !isObject(value.providers)

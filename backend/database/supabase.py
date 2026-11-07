@@ -116,12 +116,13 @@ class SupabaseRepository:
                 headers={"apikey": self.anon_key, "Accept": "application/json"},
                 timeout=httpx.Timeout(3.0, connect=2.0),
             )
-            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v5"
+            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v6"
         except (httpx.HTTPError, ValueError):
             return False
 
     def save_analysis_bundle(self, anomaly: CostAnomaly, source: str, trace: DeciderResponseTrace,
-                             approval: Optional[ApprovalItem], report: InvestigationReport) -> None:
+                             approval: Optional[ApprovalItem], report: InvestigationReport,
+                             *, partial_data: bool = False, data_warnings: Optional[list[str]] = None) -> None:
         scope = self._current_scope()
         storage_path = f"{scope.organization_id}/{report.report_id}.json"
         report_bytes = json.dumps(report.model_dump(mode="json"), separators=(",", ":")).encode("utf-8")
@@ -130,7 +131,8 @@ class SupabaseRepository:
         self._storage_upload(scope, storage_path, report_bytes)
         bundle = {
             "target_org": scope.organization_id,
-            "analysis": {"id": anomaly.anomaly_id, "source": source, "anomaly": anomaly.model_dump(mode="json")},
+            "analysis": {"id": anomaly.anomaly_id, "source": source, "anomaly": anomaly.model_dump(mode="json"),
+                         "partial_data": partial_data, "data_warnings": data_warnings or []},
             "decision": {"id": trace.decision_id, "analysis_id": anomaly.anomaly_id, "trace": trace.model_dump(mode="json")},
             "approval": ({"id": approval.id, "analysis_id": approval.anomaly_id, "decision_id": approval.decision_id,
                           "service": approval.service, "environment": approval.environment,
@@ -197,6 +199,62 @@ class SupabaseRepository:
                              params={"select": "trace", "organization_id": f"eq.{scope.organization_id}",
                                      "order": "created_at.desc,id.desc", "limit": str(max(1, min(limit, 100)))} ) or []
         return [DeciderResponseTrace.model_validate(row["trace"]) for row in rows]
+
+    def get_latest_analysis(self) -> Optional[dict[str, Any]]:
+        """Restore the newest persisted tenant analysis using only the caller JWT/RLS."""
+        scope = self._current_scope()
+        analyses = self._request("GET", "cost_analyses", token=scope.access_token,
+            params={"select": "id,source,anomaly,partial_data,data_warnings",
+                    "organization_id": f"eq.{scope.organization_id}",
+                    "order": "created_at.desc,id.desc", "limit": "1"}) or []
+        if not analyses:
+            return None
+        row = analyses[0]
+        analysis_id = row.get("id")
+        if not isinstance(analysis_id, str):
+            raise SupabaseStoreError()
+        decisions = self._request("GET", "decision_traces", token=scope.access_token,
+            params={"select": "trace", "organization_id": f"eq.{scope.organization_id}",
+                    "analysis_id": f"eq.{analysis_id}", "order": "created_at.desc,id.desc", "limit": "1"}) or []
+        if not decisions:
+            logger.warning("Latest persisted analysis %s is missing its decision record.", analysis_id)
+            return None
+        decision = DeciderResponseTrace.model_validate(decisions[0]["trace"])
+        reports = self._request("GET", "investigation_reports", token=scope.access_token,
+            params={"select": "report", "organization_id": f"eq.{scope.organization_id}",
+                    "decision_id": f"eq.{decision.decision_id}",
+                    "order": "created_at.desc,id.desc", "limit": "1"}) or []
+        if not reports:
+            logger.warning("Latest persisted analysis %s is missing its report record.", analysis_id)
+            return None
+        approvals = self._request("GET", "approval_queue", token=scope.access_token,
+            params={"select": "*", "organization_id": f"eq.{scope.organization_id}",
+                    "decision_id": f"eq.{decision.decision_id}",
+                    "order": "created_at.desc,id.desc", "limit": "1"}) or []
+        approval = None
+        if approvals:
+            approval_row = approvals[0]
+            approval = ApprovalItem(id=approval_row["id"], decision_id=approval_row["decision_id"],
+                anomaly_id=approval_row["analysis_id"], service=approval_row["service"],
+                environment=approval_row["environment"], suggested_action=approval_row["suggested_action"],
+                estimated_monthly_savings=float(approval_row["estimated_monthly_savings"]), status=approval_row["status"],
+                reviewed_by=approval_row.get("reviewed_by"), reviewed_at=approval_row.get("reviewed_at"),
+                notes=approval_row.get("notes"), created_at=approval_row["created_at"],
+                is_simulated=approval_row["is_simulated"])
+        warnings = row.get("data_warnings")
+        if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
+            warnings = []
+        anomaly = CostAnomaly.model_validate(row["anomaly"])
+        return {
+            "anomaly": anomaly,
+            "decision": decision,
+            "report": InvestigationReport.model_validate(reports[0]["report"]),
+            "approval": approval,
+            "is_simulated": anomaly.is_simulated,
+            "cost_data_source": row["source"],
+            "partial_data": bool(row.get("partial_data", False)),
+            "data_warnings": warnings,
+        }
 
     def get_profile(self) -> dict[str, Any]:
         scope = self._current_scope()

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { ApiError, apiUrl, connectAwsIntegration, disconnectAwsIntegration, fetchAccountProfile, fetchApprovals, fetchAwsIntegration, fetchDecisions, fetchHealth, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision, updateAccountProfile, verifyAwsIntegration } from "../src/api.ts";
+import { ApiError, apiUrl, connectAwsIntegration, disconnectAwsIntegration, fetchAccountProfile, fetchApprovals, fetchAwsIntegration, fetchDecisions, fetchHealth, fetchLatestAnalysis, fetchScenarios, requestJson, resolveApiBase, runAnalysis, submitApprovalDecision, updateAccountProfile, verifyAwsIntegration } from "../src/api.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -85,6 +85,7 @@ test("each dashboard API helper uses the current FastAPI route and intended meth
     let payload: unknown = [];
     if (url.pathname === "/api/health") payload = { environment: "demo", providers: { decider: {}, narrator: {}, cost_explorer: {} } };
     if (url.pathname === "/api/analyze") payload = { anomaly: { metrics: {}, time_series: [] }, decision: {}, report: { observed_facts: [], safe_recommendations: [] }, is_simulated: true, cost_data_source: "synthetic_scenario", partial_data: false, data_warnings: [] };
+    if (url.pathname === "/api/analysis/latest") payload = null;
     if (url.pathname === "/api/approvals/appr-1/decision") payload = approval;
     return new Response(JSON.stringify(payload), { status: 200 });
   };
@@ -93,14 +94,16 @@ test("each dashboard API helper uses the current FastAPI route and intended meth
   await runAnalysis("compute_spike", false, undefined, production);
   await fetchDecisions(undefined, production);
   await fetchApprovals(undefined, production);
+  assert.equal(await fetchLatestAnalysis(undefined, production), null);
   await submitApprovalDecision("appr-1", "approved", "ok", undefined, production);
   assert.deepEqual(calls.map((call) => [call.path, call.method]), [
     ["/api/health", "GET"], ["/api/demo/scenarios", "GET"], ["/api/analyze", "POST"],
-    ["/api/decisions?limit=15", "GET"], ["/api/approvals", "GET"], ["/api/approvals/appr-1/decision", "POST"],
+    ["/api/decisions?limit=15", "GET"], ["/api/approvals", "GET"], ["/api/analysis/latest", "GET"],
+    ["/api/approvals/appr-1/decision", "POST"],
   ]);
   for (const call of calls.filter((item) => item.method === "GET")) assert.equal(call.headers.has("Content-Type"), false);
   assert.deepEqual(JSON.parse(String(calls[2].body)), { scenario_id: "compute_spike", use_aws_cost_explorer: false });
-  assert.deepEqual(JSON.parse(String(calls[5].body)), { action: "approved", notes: "ok" });
+  assert.deepEqual(JSON.parse(String(calls[6].body)), { action: "approved", notes: "ok" });
 });
 
 test("request timeout is reported as a recoverable API error", async () => {
@@ -116,6 +119,24 @@ test("request timeout is reported as a recoverable API error", async () => {
   } finally {
     Object.defineProperty(AbortSignal, "timeout", { configurable: true, value: originalTimeout });
   }
+});
+
+test("latest analysis restores its source and partial-data warnings", async () => {
+  const latest = {
+    anomaly: { anomaly_id: "analysis-1", service: "Amazon EC2", metrics: {}, time_series: [], is_simulated: false },
+    decision: { decision_id: "decision-1", action: "monitor", timestamp: "2026-11-08T00:00:00Z", provider: "rules" },
+    report: { report_id: "report-1", anomaly_id: "analysis-1", decision_id: "decision-1", observed_facts: [], safe_recommendations: [] },
+    approval: null, is_simulated: false, cost_data_source: "aws_cost_explorer", partial_data: true,
+    data_warnings: ["PARTIAL_DATA: one day of cost data is missing"],
+  };
+  globalThis.fetch = async (input) => {
+    assert.equal(new URL(String(input)).pathname, "/api/analysis/latest");
+    return new Response(JSON.stringify(latest), { status: 200 });
+  };
+  const restored = await fetchLatestAnalysis(undefined, production);
+  assert.equal(restored?.anomaly.anomaly_id, "analysis-1");
+  assert.equal(restored?.partial_data, true);
+  assert.deepEqual(restored?.data_warnings, latest.data_warnings);
 });
 
 test("account profile reads and updates use the authenticated profile endpoint", async () => {

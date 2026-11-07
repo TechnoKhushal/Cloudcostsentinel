@@ -25,7 +25,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
         assert request.headers["apikey"] == "public-anon-key"
         assert "authorization" not in request.headers
         assert json.loads(request.content) == {}
-        return httpx.Response(200, json="cloudcost-sentinel-v5")
+        return httpx.Response(200, json="cloudcost-sentinel-v6")
 
     repo = _repository(handler)
     try:
@@ -38,7 +38,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
 @pytest.mark.parametrize("response", [
     httpx.Response(404, json={"message": "function not found"}),
     httpx.Response(200, json="incomplete"),
-    httpx.Response(200, json={"version": "cloudcost-sentinel-v5"}),
+    httpx.Response(200, json={"version": "cloudcost-sentinel-v6"}),
 ])
 def test_production_readiness_fails_if_schema_probe_is_missing_or_mismatched(response):
     repo = _repository(lambda _request: response)
@@ -66,6 +66,8 @@ async def test_analysis_bundle_uploads_private_report_then_persists_tenant_bundl
         assert body["target_org"] == org_id
         assert body["report"]["storage_path"].startswith(f"{org_id}/")
         assert body["analysis"]["id"] == body["decision"]["analysis_id"]
+        assert body["analysis"]["partial_data"] is True
+        assert body["analysis"]["data_warnings"] == ["PARTIAL_DATA: test fixture"]
         assert body["decision"]["id"] == body["report"]["decision_id"]
         assert body["approval"] is None or body["approval"]["id"]
         return httpx.Response(204)
@@ -80,11 +82,61 @@ async def test_analysis_bundle_uploads_private_report_then_persists_tenant_bundl
             decider_action_audit="Decision unchanged.", likely_investigation_areas=[], safe_recommendations=[],
             assumptions_and_limitations=[], follow_up_checklist=[], provider="offline", model_id="deterministic-v1",
             is_simulated=True, generated_at="2026-10-26T00:00:00Z")
-        repo.save_analysis_bundle(anomaly, "synthetic_scenario", trace, None, report)
+        repo.save_analysis_bundle(anomaly, "aws_cost_explorer", trace, None, report,
+                                  partial_data=True, data_warnings=["PARTIAL_DATA: test fixture"])
     finally:
         repo.reset_scope(scope_token)
         repo.close()
     assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_latest_analysis_restore_is_bounded_to_current_tenant_and_preserves_quality_metadata():
+    org_id, user_id = str(uuid4()), str(uuid4())
+    anomaly = CostScenarioRegistry.generate_scenario_anomaly("stable_baseline")
+    trace = await DeciderClient(provider="mock").decide(anomaly)
+    report = InvestigationReport(report_id="rpt-history_001", anomaly_id=anomaly.anomaly_id,
+        decision_id=trace.decision_id, title="Persisted", executive_summary="Stored analysis.", observed_facts=[],
+        decider_action_audit="Decision unchanged.", likely_investigation_areas=[], safe_recommendations=[],
+        assumptions_and_limitations=[], follow_up_checklist=[], provider="offline", model_id="deterministic-v1",
+        is_simulated=True, generated_at="2026-11-08T00:00:00Z")
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        assert request.headers["authorization"] == "Bearer caller-token"
+        assert request.url.params["organization_id"] == f"eq.{org_id}"
+        if request.url.path.endswith("/cost_analyses"):
+            assert request.url.params["limit"] == "1"
+            return httpx.Response(200, json=[{"id": anomaly.anomaly_id, "source": "aws_cost_explorer",
+                "anomaly": anomaly.model_dump(mode="json"), "partial_data": True,
+                "data_warnings": ["PARTIAL_DATA: test fixture"]}])
+        if request.url.path.endswith("/decision_traces"):
+            assert request.url.params["analysis_id"] == f"eq.{anomaly.anomaly_id}"
+            return httpx.Response(200, json=[{"trace": trace.model_dump(mode="json")}])
+        if request.url.path.endswith("/investigation_reports"):
+            assert request.url.params["decision_id"] == f"eq.{trace.decision_id}"
+            return httpx.Response(200, json=[{"report": report.model_dump(mode="json")}])
+        if request.url.path.endswith("/approval_queue"):
+            assert request.url.params["decision_id"] == f"eq.{trace.decision_id}"
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    repo = _repository(handler)
+    token = repo.set_scope(RequestScope(user_id, org_id, "reader", "caller-token"))
+    try:
+        result = repo.get_latest_analysis()
+    finally:
+        repo.reset_scope(token)
+        repo.close()
+    assert result is not None
+    assert result["anomaly"].anomaly_id == anomaly.anomaly_id
+    assert result["decision"].decision_id == trace.decision_id
+    assert result["report"].report_id == report.report_id
+    assert result["cost_data_source"] == "aws_cost_explorer"
+    assert result["partial_data"] is True
+    assert result["data_warnings"] == ["PARTIAL_DATA: test fixture"]
+    assert len(seen) == 4
 
 
 def test_read_query_is_explicitly_tenant_scoped_and_uses_caller_jwt():

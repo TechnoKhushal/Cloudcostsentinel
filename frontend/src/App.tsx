@@ -11,11 +11,11 @@ import { CostExplorerPage } from "./components/CostExplorerPage";
 import { FindingsPage } from "./components/FindingsPage";
 import { AccountSettingsPage, IntegrationsPage } from "./components/ServicePages";
 import type { ApprovalItem, CostAnomaly, DeciderResponseTrace, InvestigationReport, HealthInfo, Scenario } from "./types";
-import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, submitApprovalDecision, downloadPrivateReport } from "./api";
+import { ApiError, fetchHealth, fetchScenarios, runAnalysis, fetchApprovals, fetchDecisions, fetchLatestAnalysis, submitApprovalDecision, downloadPrivateReport } from "./api";
 import { buildAnalysisCsv, buildExecutiveBrief, downloadAnalysisCsv } from "./analysisExport";
 
 const SpendChart = lazy(() => import("./components/SpendChart").then(({ SpendChart }) => ({ default: SpendChart })));
-type ResourceKey = "health" | "scenarios" | "decisions" | "approvals";
+type ResourceKey = "health" | "scenarios" | "decisions" | "approvals" | "latest";
 type ResourceErrors = Record<ResourceKey, ApiError | Error | null>;
 const pageIds: WorkspaceScreen[] = ["overview", "costs", "findings", "recommendations", "reports", "integrations", "settings", "landing"];
 
@@ -35,7 +35,7 @@ export const App = () => {
   const [decisionHistory, setDecisionHistory] = useState<DeciderResponseTrace[]>([]);
   const [report, setReport] = useState<InvestigationReport | null>(null);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
-  const [resourceErrors, setResourceErrors] = useState<ResourceErrors>({ health: null, scenarios: null, decisions: null, approvals: null });
+  const [resourceErrors, setResourceErrors] = useState<ResourceErrors>({ health: null, scenarios: null, decisions: null, approvals: null, latest: null });
   const [analysisError, setAnalysisError] = useState<ApiError | Error | null>(null);
   const [dataWarning, setDataWarning] = useState<string | null>(null);
   const [costDataSource, setCostDataSource] = useState<string | null>(null);
@@ -105,16 +105,18 @@ export const App = () => {
   }, []);
 
   const refreshResources = useCallback(async (signal: AbortSignal, runInitialAnalysis = false) => {
-    const results = await Promise.allSettled([fetchHealth(signal), fetchScenarios(signal), fetchDecisions(signal), fetchApprovals(signal)]);
+    const results = await Promise.allSettled([fetchHealth(signal), fetchScenarios(signal), fetchDecisions(signal), fetchApprovals(signal), fetchLatestAnalysis(signal)]);
     if (!mounted.current || signal.aborted) return;
-    const [healthResult, scenarioResult, decisionResult, approvalResult] = results;
+    const [healthResult, scenarioResult, decisionResult, approvalResult, latestResult] = results;
     setResourceErrors({
       health: healthResult.status === "rejected" ? toError(healthResult.reason) : null,
       scenarios: scenarioResult.status === "rejected" ? toError(scenarioResult.reason) : null,
       decisions: decisionResult.status === "rejected" ? toError(decisionResult.reason) : null,
       approvals: approvalResult.status === "rejected" ? toError(approvalResult.reason) : null,
+      latest: latestResult.status === "rejected" ? toError(latestResult.reason) : null,
     });
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
+    if (latestResult.status === "fulfilled" && latestResult.value) hasAnomalyRef.current = true;
     if (scenarioResult.status === "fulfilled" && scenarioResult.value.length === 0 && !(healthResult.status === "fulfilled" && healthResult.value.environment === "production")) {
       setResourceErrors((current) => ({ ...current, scenarios: new Error("The backend returned no scenarios. Check configuration and retry.") }));
     }
@@ -130,6 +132,16 @@ export const App = () => {
     }
     if (decisionResult.status === "fulfilled") setDecisionHistory(decisionResult.value);
     if (approvalResult.status === "fulfilled") setApprovals(approvalResult.value);
+    if (latestResult.status === "fulfilled" && latestResult.value) {
+      const restored = latestResult.value;
+      hasAnomalyRef.current = true;
+      setAnomaly(restored.anomaly);
+      setDecision(restored.decision);
+      setReport(restored.report);
+      setCostDataSource(restored.cost_data_source);
+      setDataWarning(restored.data_warnings.length > 0 ? restored.data_warnings.join(" ") : null);
+      if (restored.approval) setApprovals((current) => [restored.approval!, ...current.filter((item) => item.id !== restored.approval!.id)]);
+    }
     setLastChecked(new Date());
     setInitializing(false);
     setRefreshing(false);
@@ -192,7 +204,7 @@ export const App = () => {
 
   const failedResources = Object.entries(resourceErrors).filter(([, error]) => error !== null) as [ResourceKey, Error][];
   const backendUnreachable = !health && Boolean(resourceErrors.health);
-  const resourceLabels: Record<ResourceKey, string> = { health: "Backend health", scenarios: "Scenario list", decisions: "Decision history", approvals: "Approvals" };
+  const resourceLabels: Record<ResourceKey, string> = { health: "Backend health", scenarios: "Scenario list", decisions: "Decision history", approvals: "Approvals", latest: "Latest saved analysis" };
   const filteredDecisions = decisionHistory.filter((item) => !query || `${item.action} ${item.provider} ${item.decision_id}`.toLowerCase().includes(query.toLowerCase()));
   const supabaseProfileEnabled = Boolean(health?.auth?.enabled && health.persistence?.provider === "supabase");
 
@@ -234,7 +246,7 @@ export const App = () => {
         </>}
       </main>}
       {screen === "recommendations" && <main className="page-content"><div className="page-heading-row"><div><p className="eyebrow">POLICY &amp; HUMAN REVIEW</p><h1>Recommendations <em>&amp; approvals</em></h1><p className="page-lede">Recommendations explain the API decision. Approval transitions update internal review state only.</p></div></div><div className="recommendation-grid">{decision ? <DecisionPanel decision={decision} /> : <section className="empty-state"><h2>No decision trace</h2><p>Run an analysis to view its recommendation.</p><a className="action-primary" href="#overview">Go to Overview</a></section>}<ApprovalsFeed approvals={approvals} onDecide={decideApproval} pendingIds={pendingApprovals} error={resourceErrors.approvals?.message ?? null} /></div></main>}
-      {screen === "reports" && <main className="page-content"><div className="page-heading-row"><div><p className="eyebrow">REPORTS &amp; EXPORTS</p><h1>Analysis <em>reports</em></h1><p className="page-lede">The current API provides the most recent analysis in this browser session. A report history endpoint is not available yet.</p></div><div className="page-actions">{anomaly && decision && report && <button className="action-secondary compact-action" onClick={handleExport}><span aria-hidden="true">↓</span>Export analysis CSV</button>}</div></div>{report ? <><div className="report-source-card"><span className="provenance observed">CURRENT SESSION REPORT</span><span>{report.generated_at}</span><span>{report.provider} · {report.model_id}</span></div><InvestigationReportPanel report={report} canDownload={health?.persistence?.provider === "supabase"} onDownload={() => void handleReportDownload()} /></> : <section className="empty-state"><h2>No report is available.</h2><p>Run an analysis. Reports are not fabricated when the API has no result.</p><a className="action-primary" href="#overview">Go to Overview</a></section>}</main>}
+      {screen === "reports" && <main className="page-content"><div className="page-heading-row"><div><p className="eyebrow">REPORTS &amp; EXPORTS</p><h1>Analysis <em>reports</em></h1><p className="page-lede">The latest saved analysis is restored after reload. A multi-report history and search are not available yet.</p></div><div className="page-actions">{anomaly && decision && report && <button className="action-secondary compact-action" onClick={handleExport}><span aria-hidden="true">↓</span>Export analysis CSV</button>}</div></div>{report ? <><div className="report-source-card"><span className="provenance observed">LATEST SAVED REPORT</span><span>{report.generated_at}</span><span>{report.provider} · {report.model_id}</span></div><InvestigationReportPanel report={report} canDownload={health?.persistence?.provider === "supabase"} onDownload={() => void handleReportDownload()} /></> : <section className="empty-state"><h2>No report is available.</h2><p>Run an analysis. Reports are not fabricated when the API has no result.</p><a className="action-primary" href="#overview">Go to Overview</a></section>}</main>}
       {screen !== "overview" && screen !== "landing" && screen !== "costs" && screen !== "findings" && screen !== "recommendations" && screen !== "reports" && screen !== "integrations" && screen !== "settings" && <main className="page-content"><p>Unknown page.</p></main>}
       <footer className="workspace-footer"><a href="#landing">CLOUDCOST SENTINEL</a><span>Editorial FinOps observability</span><span>Decision support only · No automatic cloud changes</span><span>Mode: {health?.environment ?? "checking"}</span></footer>
       {toast && <div className={`toast ${toast.error ? "toast-error" : "toast-success"}`} role={toast.error ? "alert" : "status"} aria-live={toast.error ? "assertive" : "polite"}>{toast.text}<button type="button" onClick={() => setToast(null)} aria-label="Dismiss notification">×</button></div>}

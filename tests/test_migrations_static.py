@@ -12,9 +12,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202610260003_membership_role_and_storage_cleanup.sql",
         "202611070001_tenant_aws_role_connections.sql",
         "202611070002_production_schema_readiness.sql",
+        "202611080001_persist_analysis_quality_metadata.sql",
     ]
-    base, runtime, upgrade, customer_aws, readiness = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade, customer_aws, readiness):
+    base, runtime, upgrade, customer_aws, readiness, quality_metadata = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -42,5 +43,8 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "cloudcost_sentinel_schema_version" in readiness
     assert "grant execute on function public.cloudcost_sentinel_schema_version() to anon" in readiness
     assert "notify pgrst, 'reload schema'" in readiness
+    assert "data_warnings jsonb" in quality_metadata
+    assert "partial_data boolean" in quality_metadata
+    assert "cloudcost-sentinel-v6" in quality_metadata
     assert "service_role" not in customer_aws
-    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness
+    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata

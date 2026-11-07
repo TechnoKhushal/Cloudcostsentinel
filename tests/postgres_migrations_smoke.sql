@@ -7,7 +7,8 @@ select 1 / case when public.get_my_org_role(:'created_workspace') = 'owner' then
 
 select public.persist_analysis_bundle(jsonb_build_object(
   'target_org', :'created_workspace',
-  'analysis', jsonb_build_object('id','analysis-1','source','aws_cost_explorer','anomaly',jsonb_build_object('service','Amazon EC2')),
+  'analysis', jsonb_build_object('id','analysis-1','source','aws_cost_explorer','anomaly',jsonb_build_object('service','Amazon EC2'),
+    'partial_data',true,'data_warnings',jsonb_build_array('PARTIAL_DATA: fixture warning')),
   'decision', jsonb_build_object('id','decision-1','trace',jsonb_build_object('decision','review')),
   'report', jsonb_build_object('id','report-1','report',jsonb_build_object('summary','test'),'storage_path', :'created_workspace' || '/report-1.json')
 ));
@@ -34,5 +35,9 @@ select 1 / case when (select count(*) from public.cost_analyses) = 0 then 1 else
 
 reset role;
 set role anon;
-select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v5' then 1 else 0 end
+select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v6' then 1 else 0 end
   as assert_production_readiness_probe;
+
+reset role;
+select 1 / case when (select partial_data and data_warnings = '["PARTIAL_DATA: fixture warning"]'::jsonb
+  from public.cost_analyses where id = 'analysis-1') then 1 else 0 end as assert_analysis_quality_metadata;

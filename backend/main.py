@@ -505,9 +505,13 @@ async def analyze_anomaly(
     # 4. Generate a grounded report with OpenRouter or the deterministic offline fallback
     report: InvestigationReport = await narrator.generate_report(anomaly, trace)
     if isinstance(db, SupabaseRepository):
-        await run_in_threadpool(db.save_analysis_bundle, anomaly, cost_data_source, trace, approval_item, report)
+        await run_in_threadpool(db.save_analysis_bundle, anomaly, cost_data_source, trace, approval_item, report,
+                                partial_data=any(warning.startswith("PARTIAL_DATA:") for warning in data_warnings),
+                                data_warnings=data_warnings)
     else:
-        await run_in_threadpool(db.save_anomaly, anomaly)
+        await run_in_threadpool(db.save_anomaly, anomaly, source=cost_data_source,
+                                partial_data=any(warning.startswith("PARTIAL_DATA:") for warning in data_warnings),
+                                data_warnings=data_warnings)
         await run_in_threadpool(db.save_decision_trace, anomaly.anomaly_id, trace)
         if approval_item:
             await run_in_threadpool(db.save_approval, approval_item)
@@ -528,6 +532,14 @@ async def analyze_anomaly(
 # ------------------------------------------------------------------------------
 # Decisions and Approvals
 # ------------------------------------------------------------------------------
+@app.get("/api/analysis/latest", tags=["Analysis"])
+async def get_latest_analysis(
+    principal: AuthenticatedPrincipal = Depends(require_viewer),
+) -> Optional[Dict[str, Any]]:
+    """Restore only the current caller's latest analysis from tenant-scoped storage."""
+    return await run_in_threadpool(db.get_latest_analysis)
+
+
 @app.get("/api/decisions", tags=["Decisions"])
 async def get_decisions(
     limit: int = Query(default=20, ge=1, le=100),

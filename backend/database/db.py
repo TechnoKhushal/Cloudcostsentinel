@@ -57,7 +57,10 @@ class DatabaseRepository:
                     environment TEXT,
                     criticality TEXT,
                     data_json TEXT,
-                    detected_at TEXT
+                    detected_at TEXT,
+                    source TEXT NOT NULL DEFAULT 'synthetic_scenario',
+                    partial_data INTEGER NOT NULL DEFAULT 0,
+                    data_warnings_json TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE TABLE IF NOT EXISTS decisions (
@@ -106,6 +109,14 @@ class DatabaseRepository:
             columns = [col["name"] for col in cursor.fetchall()]
             if "is_simulated" not in columns:
                 conn.execute("ALTER TABLE approvals ADD COLUMN is_simulated INTEGER DEFAULT 1")
+            cursor = conn.execute("PRAGMA table_info(anomalies)")
+            anomaly_columns = {col["name"] for col in cursor.fetchall()}
+            if "source" not in anomaly_columns:
+                conn.execute("ALTER TABLE anomalies ADD COLUMN source TEXT NOT NULL DEFAULT 'synthetic_scenario'")
+            if "partial_data" not in anomaly_columns:
+                conn.execute("ALTER TABLE anomalies ADD COLUMN partial_data INTEGER NOT NULL DEFAULT 0")
+            if "data_warnings_json" not in anomaly_columns:
+                conn.execute("ALTER TABLE anomalies ADD COLUMN data_warnings_json TEXT NOT NULL DEFAULT '[]'")
 
     def check_ready(self) -> bool:
         """Return whether the configured local repository accepts a lightweight query."""
@@ -116,12 +127,15 @@ class DatabaseRepository:
         except (sqlite3.Error, OSError):
             return False
 
-    def save_anomaly(self, anomaly: CostAnomaly) -> None:
+    def save_anomaly(self, anomaly: CostAnomaly, *, source: str = "synthetic_scenario",
+                     partial_data: bool = False, data_warnings: Optional[List[str]] = None) -> None:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO anomalies (anomaly_id, scenario_id, scenario_name, service, environment, criticality, data_json, detected_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO anomalies
+                    (anomaly_id, scenario_id, scenario_name, service, environment, criticality, data_json, detected_at,
+                     source, partial_data, data_warnings_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     anomaly.anomaly_id,
@@ -132,8 +146,65 @@ class DatabaseRepository:
                     anomaly.criticality,
                     anomaly.model_dump_json(),
                     anomaly.detected_at,
+                    source,
+                    int(partial_data),
+                    json.dumps(data_warnings or [], separators=(",", ":")),
                 ),
             )
+
+    def get_latest_analysis(self) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT anomaly_id, data_json, source, partial_data, data_warnings_json
+                FROM anomalies
+                ORDER BY detected_at DESC, rowid DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if not row:
+                return None
+            anomaly = CostAnomaly.model_validate_json(row["data_json"])
+            decision_row = conn.execute(
+                "SELECT trace_json FROM decisions WHERE anomaly_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+                (anomaly.anomaly_id,),
+            ).fetchone()
+            if not decision_row:
+                return None
+            trace = DeciderResponseTrace.model_validate_json(decision_row["trace_json"])
+            report_row = conn.execute(
+                "SELECT report_json FROM reports WHERE decision_id = ? ORDER BY generated_at DESC, rowid DESC LIMIT 1",
+                (trace.decision_id,),
+            ).fetchone()
+            if not report_row:
+                return None
+            report = InvestigationReport.model_validate_json(report_row["report_json"])
+            approval_rows = conn.execute(
+                "SELECT * FROM approvals WHERE decision_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                (trace.decision_id,),
+            ).fetchall()
+            approval = None
+            if approval_rows:
+                approval_row = approval_rows[0]
+                approval = ApprovalItem(
+                    id=approval_row["id"], decision_id=approval_row["decision_id"], anomaly_id=approval_row["anomaly_id"],
+                    service=approval_row["service"], environment=approval_row["environment"],
+                    suggested_action=approval_row["suggested_action"],
+                    estimated_monthly_savings=approval_row["estimated_monthly_savings"], status=approval_row["status"],
+                    reviewed_by=approval_row["reviewed_by"], reviewed_at=approval_row["reviewed_at"], notes=approval_row["notes"],
+                    created_at=approval_row["created_at"], is_simulated=bool(approval_row["is_simulated"]),
+                )
+            try:
+                warnings = json.loads(row["data_warnings_json"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                warnings = []
+            if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
+                warnings = []
+            return {
+                "anomaly": anomaly, "decision": trace, "report": report, "approval": approval,
+                "is_simulated": anomaly.is_simulated, "cost_data_source": row["source"],
+                "partial_data": bool(row["partial_data"]), "data_warnings": warnings,
+            }
 
     def save_decision_trace(self, anomaly_id: str, trace: DeciderResponseTrace) -> None:
         with self._get_connection() as conn:
