@@ -11,7 +11,7 @@ Production API rate limits are stored in Supabase and enforced after caller auth
 1. Create a dedicated Supabase project. Enable email/password authentication and email verification. The checked-in `supabase/config.toml` sets the canonical Site URL to `https://cloudcostsentinel.vercel.app`, enables email confirmations, and allows only that origin plus `http://localhost:5173` and `http://127.0.0.1:5173`. The frontend sends the current origin as the verification/recovery callback, so add an exact Vercel preview URL only when you intentionally test that preview. For a hosted project, verify these values under **Authentication → URL Configuration**; `config.toml` governs local CLI configuration unless you explicitly push hosted Auth configuration. Do not run a config push without reviewing its full diff because it can change project-wide Auth settings.
 2. Set an asymmetric Supabase JWT signing key (RS256 or ES256) and note the project's URL and publishable/anon key. The backend verifies asymmetric JWTs using the Supabase JWKS endpoint.
 3. Back up the project if it contains data. Apply the nine migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, `202611070001_tenant_aws_role_connections.sql`, `202611070002_production_schema_readiness.sql`, `202611080001_persist_analysis_quality_metadata.sql`, `202611120001_shared_api_rate_limits.sql`, `202611120002_lock_workspace_membership_writes.sql`, and `202611120003_account_data_lifecycle.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
-4. Inspect the tables, functions, RLS policies, private `sentinel-reports` bucket, `aws_account_connections`, durable per-workspace query counters, and workspace budget table. Run adversarial tests with two isolated accounts and verify cross-workspace reads, writes, approvals, AWS connections, budgets, object downloads and deletes fail.
+4. Inspect the tables, functions, RLS policies, private `sentinel-reports` bucket, `aws_account_connections`, durable per-workspace query counters, and workspace budget table. For a first live check, create two separate Auth test users and personal workspaces, then run `python scripts/smoke_test_supabase_tenants.py` with the local test variables below. The script validates each identity through the API, rejects an unauthenticated API request, and attempts direct PostgREST reads of the other user's workspace rows using both tokens. It is read-only for workspace data, does not create users or invoke AWS, and does not replace manual checks for writes, approvals, private object download/delete or the account-deletion Edge Function.
 5. Configure the frontend and backend variables below. Deploy API and frontend only after migration, AWS role trust, and account-flow checks pass.
 
 ### Workspace export and account deletion
@@ -23,6 +23,19 @@ The API's `GET /api/account/export` returns an owner/admin-authorized JSON works
 Use Supabase Auth's SMTP settings with a verified sender domain and a transactional mail provider. Store SMTP credentials in Supabase's Auth configuration, not in the frontend or this app's Render environment. Set the Supabase Site URL to the canonical Vercel origin and allow only that exact origin plus the exact local development callback. Keep email confirmation enabled; test verification and recovery with separate inboxes, including expired and reused links, before opening signup to customers. SMTP provider credentials are not application environment variables and are not required by this API.
 
 ## Environment variables
+
+### Local-only two-account smoke test
+
+Put these values in an ignored local `.env` file only when running the tenant smoke script. Use two dedicated test accounts in a dedicated Supabase project; do not set the test-account passwords in Vercel or Render. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL` are also used by the app configuration; the four `SUPABASE_SMOKE_*` values are test-only and are not production environment variables.
+
+```text
+SUPABASE_SMOKE_USER_A_EMAIL=
+SUPABASE_SMOKE_USER_A_PASSWORD=
+SUPABASE_SMOKE_USER_B_EMAIL=
+SUPABASE_SMOKE_USER_B_PASSWORD=
+```
+
+The two accounts must be separate users with separate personal workspaces. The script checks live Auth and backend endpoints, so use it only after applying the migrations and deploying a production-configured API to the dedicated test project.
 
 ### Vercel frontend
 
