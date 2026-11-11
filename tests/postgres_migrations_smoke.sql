@@ -4,6 +4,10 @@ set role authenticated;
 
 select public.get_or_create_my_org() as created_workspace \gset
 select 1 / case when public.get_my_org_role(:'created_workspace') = 'owner' then 1 else 0 end as assert_owner_role;
+select 1 / case when not has_table_privilege(current_user, 'public.organization_members', 'INSERT')
+  and not has_table_privilege(current_user, 'public.organization_members', 'UPDATE')
+  and not has_table_privilege(current_user, 'public.organization_members', 'DELETE')
+  then 1 else 0 end as assert_membership_role_mutation_denied;
 
 select public.persist_analysis_bundle(jsonb_build_object(
   'target_org', :'created_workspace',
@@ -45,12 +49,21 @@ where organization_id=:'created_workspace';
 
 reset role;
 set request.jwt.claim.sub = '33333333-3333-4333-8333-333333333333';
+set test.created_workspace = :'created_workspace';
 set role authenticated;
 select 1 / case when (select count(*) from public.cost_analyses) = 0 then 1 else 0 end as assert_unassociated_user_cannot_read;
+do $$
+begin
+  insert into public.cost_analyses(id, organization_id, user_id, source, anomaly)
+  values ('cross-tenant-write', current_setting('test.created_workspace')::uuid, auth.uid(), 'aws_cost_explorer', '{}'::jsonb);
+  raise exception 'expected cross-tenant write to be denied';
+exception when insufficient_privilege then
+  null;
+end $$;
 
 reset role;
 set role anon;
-select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v7' then 1 else 0 end
+select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v8' then 1 else 0 end
   as assert_production_readiness_probe;
 
 reset role;

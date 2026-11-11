@@ -116,7 +116,7 @@ class SupabaseRepository:
                 headers={"apikey": self.anon_key, "Accept": "application/json"},
                 timeout=httpx.Timeout(3.0, connect=2.0),
             )
-            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v7"
+            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v8"
         except (httpx.HTTPError, ValueError):
             return False
 

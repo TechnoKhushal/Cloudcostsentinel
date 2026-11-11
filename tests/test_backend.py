@@ -993,6 +993,79 @@ async def test_auth_enabled_rejects_malformed_token():
             assert resp.status_code == 401
 
 
+def test_supabase_jwt_requires_uuid_subject(monkeypatch):
+    import unittest.mock
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+    from backend.auth import get_current_principal
+
+    class SigningKey:
+        key = object()
+
+    class Jwks:
+        def get_signing_key_from_jwt(self, token):
+            return SigningKey()
+
+    monkeypatch.setattr("backend.auth._get_jwks_client", lambda: Jwks())
+    monkeypatch.setattr(settings, "AUTH_ISSUER", "https://issuer.example/auth/v1")
+    monkeypatch.setattr(settings, "AUTH_AUDIENCE", "authenticated")
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", True), unittest.mock.patch(
+        "backend.auth.jwt.decode", return_value={"sub": "not-a-uuid", "iss": "https://issuer", "aud": "authenticated"}
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_principal(HTTPAuthorizationCredentials(scheme="Bearer", credentials="signed.jwt.value"))
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid authentication token."
+
+
+def test_supabase_jwt_normalizes_valid_uuid_subject(monkeypatch):
+    import unittest.mock
+    from fastapi.security import HTTPAuthorizationCredentials
+    from backend.auth import get_current_principal
+
+    class SigningKey:
+        key = object()
+
+    class Jwks:
+        def get_signing_key_from_jwt(self, token):
+            return SigningKey()
+
+    monkeypatch.setattr("backend.auth._get_jwks_client", lambda: Jwks())
+    monkeypatch.setattr(settings, "AUTH_ISSUER", "https://issuer.example/auth/v1")
+    monkeypatch.setattr(settings, "AUTH_AUDIENCE", "authenticated")
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", True), unittest.mock.patch(
+        "backend.auth.jwt.decode", return_value={"sub": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "iss": "https://issuer", "aud": "authenticated"}
+    ):
+        principal = get_current_principal(HTTPAuthorizationCredentials(scheme="Bearer", credentials="signed.jwt.value"))
+    assert principal.sub == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_supabase_jwt_expiry_is_rejected(monkeypatch):
+    import unittest.mock
+    import jwt
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+    from backend.auth import get_current_principal
+
+    class SigningKey:
+        key = object()
+
+    class Jwks:
+        def get_signing_key_from_jwt(self, token):
+            return SigningKey()
+
+    monkeypatch.setattr("backend.auth._get_jwks_client", lambda: Jwks())
+    monkeypatch.setattr(settings, "AUTH_ISSUER", "https://issuer.example/auth/v1")
+    monkeypatch.setattr(settings, "AUTH_AUDIENCE", "authenticated")
+    with unittest.mock.patch.object(settings, "AUTH_ENABLED", True), unittest.mock.patch(
+        "backend.auth.jwt.decode", side_effect=jwt.ExpiredSignatureError()
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_principal(HTTPAuthorizationCredentials(scheme="Bearer", credentials="expired.jwt.value"))
+    assert exc_info.value.status_code == 401
+    assert "expired" in exc_info.value.detail.lower()
+
+
 @pytest.mark.asyncio
 async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
     transport = ASGITransport(app=app)

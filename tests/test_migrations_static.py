@@ -14,9 +14,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202611070002_production_schema_readiness.sql",
         "202611080001_persist_analysis_quality_metadata.sql",
         "202611120001_shared_api_rate_limits.sql",
+        "202611120002_lock_workspace_membership_writes.sql",
     ]
-    base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits):
+    base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -51,6 +52,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "alter table public.api_request_counters enable row level security" in rate_limits
     assert "public.admit_api_request(text)" in rate_limits
     assert "cloudcost-sentinel-v7" in rate_limits
+    assert "cloudcost-sentinel-v8" in membership_lock
+    assert "revoke insert, update, delete on public.organization_members from authenticated" in membership_lock
+    assert "drop policy if exists members_admin_update" in membership_lock
+    assert "has_table_privilege('authenticated', 'public.organization_members', 'update')" in membership_lock
     assert "p_limit" not in rate_limits and "p_window_seconds" not in rate_limits
     assert "service_role" not in customer_aws
-    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata + rate_limits
+    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata + rate_limits + membership_lock

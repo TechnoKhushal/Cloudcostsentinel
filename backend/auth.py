@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 from typing import AsyncIterator, List, Optional
 from contextvars import Token
 
@@ -122,8 +123,19 @@ def get_current_principal(
             },
         )
 
-        sub = claims.get("sub", "unknown-user")
+        sub = claims.get("sub")
+        # Supabase auth.uid() and all tenant foreign keys require a UUID subject.
+        # Reject malformed subjects here instead of letting them fail later as an
+        # opaque database error or be interpreted differently by another layer.
+        if not isinstance(sub, str):
+            raise jwt.InvalidTokenError("invalid subject")
+        try:
+            sub = str(UUID(sub))
+        except (ValueError, AttributeError):
+            raise jwt.InvalidTokenError("invalid subject") from None
         email = claims.get("email", claims.get("preferred_username", sub))
+        if not isinstance(email, str) or len(email) > 320:
+            email = sub
 
         # Extract roles from standard claim locations: "roles", "groups", "cognito:groups"
         roles: List[str] = []

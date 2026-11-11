@@ -85,6 +85,14 @@ This log records decisions made during the staged productionization. New impleme
 
 **Limits:** 120 general authenticated API requests/minute, 5 analyses/minute, and 3 AWS role verifications/minute per user. The durable daily AWS query quota remains an independent billing cap. If the RPC cannot be reached, protected production requests fail closed.
 
+### D-010: Freeze direct workspace membership mutations until managed invitations exist
+
+**Choice:** Migration `202611120002_lock_workspace_membership_writes.sql` keeps membership reads behind tenant RLS, revokes direct authenticated insert/update/delete privileges, and updates readiness to v8. The trusted `get_or_create_my_org()` provisioning flow can still create the initial owner. The supported role set includes `reviewer`.
+
+**Reason:** There is no invitation or role-management API with audit records, ownership-transfer rules, or last-owner protection. The previous table grants let an owner/admin change membership roles directly through PostgREST, bypassing an application workflow. Blocking writes closes self-promotion and cross-member role escalation until that workflow is designed and tested.
+
+**Limits:** Existing customers who already manage memberships directly must review this migration before applying it. Invitations, member administration, and account deletion remain unavailable; do not promise multi-user workspaces yet.
+
 ### D-009: Bound bodies at the ASGI receive boundary and keep provider errors redacted
 
 **Choice:** Add `RequestBodyLimitMiddleware` that enforces a 64 KiB maximum even when a request omits `Content-Length`; include a sanitized request ID, response security headers, and generic 500 responses. Emit JSON logs through an explicit safe-field allowlist; request events include method/path/status/duration without query, body, or bearer data. Provider error responses/logs expose exception classes, not raw exception messages.

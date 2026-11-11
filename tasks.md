@@ -30,13 +30,13 @@ This is the delivery checklist for the existing CloudCost Sentinel repository. W
 
 ## Phase 3 — Identity, workspace, and tenant authorization
 
-- [ ] 21. Verify Supabase Auth configuration and supported JWT signing/rotation behavior.
-- [ ] 22. Complete sign-up, email verification, sign-in, sign-out, password reset, and expired-session UX.
+- [x] 21. Verify Supabase Auth configuration and supported JWT signing/rotation behavior; production requires asymmetric ES256/RS256 keys discoverable through JWKS.
+- [x] 22. Complete sign-up, email verification, sign-in, sign-out, password reset, and expired-session UX in the frontend; live delivery/browser lifecycle remains an external gate.
 - [ ] 23. Configure production SMTP and verify auth email deliverability and redirect allowlists.
-- [ ] 24. Review workspace provisioning, membership roles, ownership changes, and account recovery.
-- [ ] 25. Audit every API route for authentication and least-privilege role enforcement.
-- [ ] 26. Verify RLS on every tenant-owned table, RPC, and private storage object.
-- [ ] 27. Test cross-tenant read/write, IDOR, role escalation, replay, and token-expiry attempts.
+- [x] 24. Review workspace provisioning, membership roles, ownership changes, and account recovery; direct membership mutations are blocked until a safe admin workflow exists.
+- [x] 25. Audit every API route for authentication and least-privilege role enforcement.
+- [x] 26. Verify tenant RLS and private storage policy coverage in the ordered migration/readiness checks and disposable PostgreSQL smoke test.
+- [x] 27. Test cross-tenant read/write, IDOR, role escalation, replay, and token-expiry attempts in code-level and disposable PostgreSQL checks.
 - [ ] 28. Add explicit data export and account deletion flows with authorization and audit records.
 - [ ] 29. Define consent, retention, deletion, and backup behavior for customer data and generated reports.
 - [ ] 30. Pass two-user end-to-end identity and isolation checks on a dedicated Supabase project.

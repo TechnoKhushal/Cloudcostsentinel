@@ -25,7 +25,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
         assert request.headers["apikey"] == "public-anon-key"
         assert "authorization" not in request.headers
         assert json.loads(request.content) == {}
-        return httpx.Response(200, json="cloudcost-sentinel-v7")
+        return httpx.Response(200, json="cloudcost-sentinel-v8")
 
     repo = _repository(handler)
     try:
@@ -38,7 +38,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
 @pytest.mark.parametrize("response", [
     httpx.Response(404, json={"message": "function not found"}),
     httpx.Response(200, json="incomplete"),
-    httpx.Response(200, json={"version": "cloudcost-sentinel-v7"}),
+    httpx.Response(200, json={"version": "cloudcost-sentinel-v8"}),
 ])
 def test_production_readiness_fails_if_schema_probe_is_missing_or_mismatched(response):
     repo = _repository(lambda _request: response)
