@@ -384,6 +384,22 @@ async def update_account_profile(
     return await run_in_threadpool(db.update_profile, req.display_name)
 
 
+@app.get("/api/account/export", tags=["Account"])
+async def export_account_data(principal: AuthenticatedPrincipal = Depends(require_admin)) -> Response:
+    """Return a tenant-scoped JSON export; the database authorizes/logs the export atomically."""
+    if not isinstance(db, SupabaseRepository):
+        raise HTTPException(status_code=503, detail="Account export requires a persistent Supabase workspace.")
+    exported = await run_in_threadpool(db.export_workspace_data)
+    payload = json.dumps(exported, ensure_ascii=False, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > 25_000_000:
+        raise HTTPException(status_code=413, detail="Workspace export exceeds the 25 MB download limit.")
+    return Response(content=payload, media_type="application/json", headers={
+        "Content-Disposition": 'attachment; filename="cloudcost-sentinel-export.json"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 @app.get("/api/workspace/finops-settings", tags=["Workspace"])
 async def get_workspace_finops_settings(principal: AuthenticatedPrincipal = Depends(require_viewer)) -> Dict[str, Any]:
     if not isinstance(db, SupabaseRepository):

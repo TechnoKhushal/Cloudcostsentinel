@@ -56,6 +56,9 @@ jobs:
         run: |
           python -m compileall -q backend patterns scripts tests
 
+      - name: Type-check Supabase account deletion function
+        run: npx --yes deno@2.9.6 check supabase/functions/delete-account/index.ts
+
       - name: Run Backend Tests
         run: |
           python -m pytest -v tests

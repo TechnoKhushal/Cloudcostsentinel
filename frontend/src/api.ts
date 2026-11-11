@@ -216,6 +216,17 @@ export async function updateAccountProfile(displayName: string, signal?: AbortSi
   return value as unknown as AccountProfile;
 }
 
+export async function downloadAccountExport(environment: BuildEnvironment | undefined = import.meta.env): Promise<void> {
+  const value = await requestJson<Record<string, unknown>>("/api/account/export", {}, "Exporting workspace data", environment);
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "cloudcost-sentinel-export.json";
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function fetchAwsIntegration(signal?: AbortSignal, environment: BuildEnvironment | undefined = import.meta.env): Promise<AwsIntegration> {
   const result = await requestJson<AwsIntegration>("/api/integrations/aws", { signal }, "Loading AWS connection", environment);
   if (typeof result.enabled !== "boolean" || typeof result.daily_query_limit !== "number" || !(result.connection === null || typeof result.connection?.role_arn === "string")) {

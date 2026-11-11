@@ -15,9 +15,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202611080001_persist_analysis_quality_metadata.sql",
         "202611120001_shared_api_rate_limits.sql",
         "202611120002_lock_workspace_membership_writes.sql",
+        "202611120003_account_data_lifecycle.sql",
     ]
-    base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock):
+    base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock, data_lifecycle = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits, membership_lock, data_lifecycle):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -56,6 +57,13 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "revoke insert, update, delete on public.organization_members from authenticated" in membership_lock
     assert "drop policy if exists members_admin_update" in membership_lock
     assert "has_table_privilege('authenticated', 'public.organization_members', 'update')" in membership_lock
+    assert "export_my_workspace" in data_lifecycle
+    assert "account_lifecycle_events" in data_lifecycle
+    assert "on delete cascade" in data_lifecycle
+    assert "cloudcost-sentinel-v9" in data_lifecycle
+    assert "public.export_my_workspace(uuid) to authenticated" in data_lifecycle
+    assert "account.deletion_completed" in data_lifecycle
     assert "p_limit" not in rate_limits and "p_window_seconds" not in rate_limits
     assert "service_role" not in customer_aws
     assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata + rate_limits + membership_lock
+    assert "grant select, insert, update on public.account_lifecycle_events to service_role" in data_lifecycle

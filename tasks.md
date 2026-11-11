@@ -37,8 +37,8 @@ This is the delivery checklist for the existing CloudCost Sentinel repository. W
 - [x] 25. Audit every API route for authentication and least-privilege role enforcement.
 - [x] 26. Verify tenant RLS and private storage policy coverage in the ordered migration/readiness checks and disposable PostgreSQL smoke test.
 - [x] 27. Test cross-tenant read/write, IDOR, role escalation, replay, and token-expiry attempts in code-level and disposable PostgreSQL checks.
-- [ ] 28. Add explicit data export and account deletion flows with authorization and audit records.
-- [ ] 29. Define consent, retention, deletion, and backup behavior for customer data and generated reports.
+- [x] 28. Add explicit owner/admin data export and self-service account deletion flows, with reauthentication, tenant checks, private-object cleanup, and durable de-identified lifecycle audit records; live Edge Function verification remains in step 30.
+- [ ] 29. Define consent, retention, deletion, and backup behavior for customer data and generated reports; technical policy is drafted, but legal notice/consent capture and the live Supabase backup window still need owner configuration.
 - [ ] 30. Pass two-user end-to-end identity and isolation checks on a dedicated Supabase project.
 
 ## Phase 4 — Customer AWS connection and live cost ingestion

@@ -16,6 +16,8 @@ select public.persist_analysis_bundle(jsonb_build_object(
   'decision', jsonb_build_object('id','decision-1','trace',jsonb_build_object('decision','review')),
   'report', jsonb_build_object('id','report-1','report',jsonb_build_object('summary','test'),'storage_path', :'created_workspace' || '/report-1.json')
 ));
+select 1 / case when jsonb_array_length(public.export_my_workspace(:'created_workspace'::uuid)->'cost_analyses') = 1
+  then 1 else 0 end as assert_authorized_workspace_export;
 insert into public.aws_account_connections(organization_id,role_arn,external_id,account_id,updated_by)
 values (:'created_workspace','arn:aws:iam::123456789012:role/CloudCostSentinelReadOnly',
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','123456789012',auth.uid());
@@ -54,6 +56,13 @@ set role authenticated;
 select 1 / case when (select count(*) from public.cost_analyses) = 0 then 1 else 0 end as assert_unassociated_user_cannot_read;
 do $$
 begin
+  perform public.export_my_workspace(current_setting('test.created_workspace')::uuid);
+  raise exception 'expected non-member workspace export to be denied';
+exception when insufficient_privilege then
+  null;
+end $$;
+do $$
+begin
   insert into public.cost_analyses(id, organization_id, user_id, source, anomaly)
   values ('cross-tenant-write', current_setting('test.created_workspace')::uuid, auth.uid(), 'aws_cost_explorer', '{}'::jsonb);
   raise exception 'expected cross-tenant write to be denied';
@@ -63,9 +72,21 @@ end $$;
 
 reset role;
 set role anon;
-select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v8' then 1 else 0 end
+select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v9' then 1 else 0 end
   as assert_production_readiness_probe;
 
 reset role;
 select 1 / case when (select partial_data and data_warnings = '["PARTIAL_DATA: fixture warning"]'::jsonb
   from public.cost_analyses where id = 'analysis-1') then 1 else 0 end as assert_analysis_quality_metadata;
+
+set request.jwt.claim.sub = '44444444-4444-4444-8444-444444444444';
+set role authenticated;
+select public.get_or_create_my_org() as deletion_workspace \gset
+reset role;
+insert into public.account_lifecycle_events(user_id, organization_id, action)
+values (auth.uid(), :'deletion_workspace', 'account.deletion_requested');
+delete from auth.users where id = '44444444-4444-4444-8444-444444444444';
+select 1 / case when not exists (select 1 from public.organizations where id = :'deletion_workspace'::uuid)
+  and exists (select 1 from public.account_lifecycle_events where action='account.deletion_requested'
+    and user_id is null and organization_id is null)
+  then 1 else 0 end as assert_user_deletion_cascades_data_and_preserves_audit;

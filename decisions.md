@@ -91,7 +91,15 @@ This log records decisions made during the staged productionization. New impleme
 
 **Reason:** There is no invitation or role-management API with audit records, ownership-transfer rules, or last-owner protection. The previous table grants let an owner/admin change membership roles directly through PostgREST, bypassing an application workflow. Blocking writes closes self-promotion and cross-member role escalation until that workflow is designed and tested.
 
-**Limits:** Existing customers who already manage memberships directly must review this migration before applying it. Invitations, member administration, and account deletion remain unavailable; do not promise multi-user workspaces yet.
+**Limits:** Existing customers who already manage memberships directly must review this migration before applying it. Invitations and member administration remain unavailable; do not promise member administration before that workflow ships.
+
+### D-011: Keep privileged account deletion in a narrowly scoped Supabase Edge Function
+
+**Choice:** Workspace export runs through `export_my_workspace(uuid)` with the caller JWT and an owner/admin check. Account deletion is handled by the `delete-account` Edge Function, which validates the caller, requires a password sign-in within five minutes, cleans private report objects, removes only the caller's membership from shared workspaces, refuses deletion when the caller owns a shared workspace, then invokes Supabase Auth admin deletion. A de-identified lifecycle event remains after deletion.
+
+**Reason:** The Render API should not receive a Supabase key that bypasses RLS. Only the Auth admin delete and private object cleanup need privileged access, so the key remains in the Supabase Function runtime.
+
+**Limits:** Deploy the function and set its exact browser-origin allowlist before enabling account deletion. Live function/auth/storage behavior and two-user isolation remain unverified until tested in a dedicated Supabase project.
 
 ### D-009: Bound bodies at the ASGI receive boundary and keep provider errors redacted
 

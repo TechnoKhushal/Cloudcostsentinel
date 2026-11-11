@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { CheckCircle2, Shield } from "lucide-react";
-import { connectAwsIntegration, disconnectAwsIntegration, fetchAccountProfile, fetchAwsIntegration, fetchWorkspaceFinOpsSettings, updateAccountProfile, updateWorkspaceFinOpsSettings, verifyAwsIntegration, type AccountProfile, type AwsIntegration } from "../api";
+import { connectAwsIntegration, disconnectAwsIntegration, downloadAccountExport, fetchAccountProfile, fetchAwsIntegration, fetchWorkspaceFinOpsSettings, updateAccountProfile, updateWorkspaceFinOpsSettings, verifyAwsIntegration, type AccountProfile, type AwsIntegration } from "../api";
+import { supabase } from "../supabase";
 import type { HealthInfo } from "../types";
 
 export function IntegrationsPage({ health }: { health: HealthInfo | null }) {
@@ -93,6 +94,12 @@ export function AccountSettingsPage({ enabled }: { enabled: boolean }) {
   const [budgetSaving, setBudgetSaving] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
+  const [accountError, setAccountError] = useState("");
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -116,6 +123,7 @@ export function AccountSettingsPage({ enabled }: { enabled: boolean }) {
   }, [enabled]);
 
   const loading = enabled && !profile && !error;
+  const canExportWorkspace = profile !== null && ["owner", "admin"].includes(profile.role);
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -139,11 +147,39 @@ export function AccountSettingsPage({ enabled }: { enabled: boolean }) {
     finally { setBudgetSaving(false); }
   };
 
+  const exportData = async () => {
+    setExportBusy(true); setAccountError(""); setAccountMessage("");
+    try { await downloadAccountExport(); setAccountMessage("Workspace export downloaded."); }
+    catch (reason) { setAccountError(reason instanceof Error ? reason.message : "Workspace export failed."); }
+    finally { setExportBusy(false); }
+  };
+
+  const deleteAccount = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setDeleteBusy(true); setAccountError(""); setAccountMessage("");
+    try {
+      if (!supabase || deleteConfirmation !== "DELETE") throw new Error("Type DELETE exactly to confirm account removal.");
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user?.email) throw new Error("Your sign-in session could not be verified. Sign in again.");
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email: userData.user.email, password: deletePassword });
+      if (signInError) throw new Error("Password verification failed. Check your password and try again.");
+      const { error: deleteError } = await supabase.functions.invoke("delete-account", { body: { confirmation: "DELETE" } });
+      if (deleteError) throw new Error("Account deletion could not be completed. Check workspace membership or retry shortly.");
+      await supabase.auth.signOut({ scope: "local" });
+      window.location.replace("/");
+    } catch (reason) {
+      setAccountError(reason instanceof Error ? reason.message : "Account deletion failed.");
+    } finally { setDeleteBusy(false); }
+  };
+
   return <main className="page-content"><div className="page-heading-row"><div><p className="eyebrow">ACCOUNT &amp; SECURITY</p><h1>Workspace <em>settings</em></h1><p className="page-lede">Manage the profile fields currently supported by this API.</p></div></div>
     {!enabled ? <section className="empty-state"><h2>Account settings require an authenticated Supabase workspace.</h2><p>The public synthetic demo does not have persistent user profiles.</p></section> : <div className="settings-layout"><section className="settings-card"><div className="settings-card-heading"><span className="eyebrow">PERSONAL PROFILE</span>{profile && <span className="role-chip">{profile.role}</span>}</div>
       {loading ? <p className="loading-copy" role="status">Loading account profile…</p> : <form className="profile-form" onSubmit={(event) => void save(event)}><label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={120} autoComplete="name" /></label><button className="action-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save profile"}</button></form>}
       {profile && <dl className="account-facts"><div><dt>USER ID</dt><dd>{profile.user_id}</dd></div><div><dt>WORKSPACE ID</dt><dd>{profile.organization_id ?? "Not assigned"}</dd></div></dl>}
       {error && <p role="alert" className="form-error">{error}</p>}{status && <p role="status" className="form-success"><CheckCircle2 size={15} />{status}</p>}
-    </section><section className="settings-card"><div className="settings-card-heading"><span className="eyebrow">COST GOVERNANCE</span><span className="provenance observed">WORKSPACE</span></div><h2>Monthly cloud budget</h2><p className="settings-help">This target is used for forecast and budget-burn calculations. Choose the same currency AWS Cost Explorer returns for your payer account.</p><form className="profile-form" onSubmit={(event) => void saveBudget(event)}><label htmlFor="workspace-budget">Budget amount<input id="workspace-budget" type="number" min="0.01" max="1000000000000" step="0.01" value={budgetAmount} onChange={(event) => setBudgetAmount(event.target.value)} required /></label><label htmlFor="budget-currency">Three-letter currency code<input id="budget-currency" value={budgetCurrency} onChange={(event) => setBudgetCurrency(event.target.value.toUpperCase().slice(0, 3))} minLength={3} maxLength={3} pattern="[A-Za-z]{3}" required /></label><button className="action-primary" type="submit" disabled={budgetSaving || !enabled}>{budgetSaving ? "Saving…" : "Save workspace budget"}</button></form>{budgetError && <p role="alert" className="form-error">{budgetError}</p>}{budgetStatus && <p role="status" className="form-success">{budgetStatus}</p>}</section><section className="settings-card settings-security"><Shield size={19} /><h2>Sign-in &amp; recovery</h2><p>Email verification, password recovery, session refresh, and logout are handled by Supabase Auth. Workspace permissions are checked again by the API.</p><p>MFA, invitations, member administration, and organization switching are not available in this release.</p></section></div>}
+    </section><section className="settings-card"><div className="settings-card-heading"><span className="eyebrow">COST GOVERNANCE</span><span className="provenance observed">WORKSPACE</span></div><h2>Monthly cloud budget</h2><p className="settings-help">This target is used for forecast and budget-burn calculations. Choose the same currency AWS Cost Explorer returns for your payer account.</p><form className="profile-form" onSubmit={(event) => void saveBudget(event)}><label htmlFor="workspace-budget">Budget amount<input id="workspace-budget" type="number" min="0.01" max="1000000000000" step="0.01" value={budgetAmount} onChange={(event) => setBudgetAmount(event.target.value)} required /></label><label htmlFor="budget-currency">Three-letter currency code<input id="budget-currency" value={budgetCurrency} onChange={(event) => setBudgetCurrency(event.target.value.toUpperCase().slice(0, 3))} minLength={3} maxLength={3} pattern="[A-Za-z]{3}" required /></label><button className="action-primary" type="submit" disabled={budgetSaving || !enabled}>{budgetSaving ? "Saving…" : "Save workspace budget"}</button></form>{budgetError && <p role="alert" className="form-error">{budgetError}</p>}{budgetStatus && <p role="status" className="form-success">{budgetStatus}</p>}</section><section className="settings-card settings-security"><Shield size={19} /><h2>Sign-in &amp; recovery</h2><p>Email verification, password recovery, session refresh, and logout are handled by Supabase Auth. Workspace permissions are checked again by the API.</p><p>MFA, invitations, member administration, and organization switching are not available in this release.</p></section>
+      <section className="settings-card account-data-card"><div className="settings-card-heading"><span className="eyebrow">YOUR DATA</span><span className="provenance observed">PRIVATE</span></div><h2>Export workspace data</h2><p>Download a JSON copy of profile, workspace, cost analysis, decisions, approvals, generated reports, settings, and audit history. Workspace export is restricted to an owner or administrator.</p><button type="button" className="action-secondary" onClick={() => void exportData()} disabled={exportBusy || !canExportWorkspace}>{exportBusy ? "Preparing export…" : "Download data export"}</button>{profile && !canExportWorkspace && <p className="settings-help">Only a workspace owner or administrator can export shared workspace records.</p>}
+        <div className="account-delete-block"><h2>Delete account and personal workspace</h2><p>This permanently deletes your account, its personal workspace records, and private report files. Deletion is blocked if your account owns or belongs to a shared workspace. Re-enter your password and type DELETE to confirm.</p><form className="profile-form" onSubmit={(event) => void deleteAccount(event)}><label htmlFor="delete-password">Password<input id="delete-password" type="password" autoComplete="current-password" value={deletePassword} onChange={(event) => setDeletePassword(event.target.value)} required minLength={8} /></label><label htmlFor="delete-confirmation">Type DELETE to confirm<input id="delete-confirmation" value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} required pattern="DELETE" /></label><button type="submit" className="danger-action" disabled={deleteBusy || !enabled || deleteConfirmation !== "DELETE"}>{deleteBusy ? "Deleting account…" : "Permanently delete account"}</button></form></div>
+        {accountError && <p role="alert" className="form-error">{accountError}</p>}{accountMessage && <p role="status" className="form-success">{accountMessage}</p>}
+      </section></div>}
   </main>;
 }

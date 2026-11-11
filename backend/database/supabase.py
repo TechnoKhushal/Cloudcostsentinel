@@ -116,7 +116,7 @@ class SupabaseRepository:
                 headers={"apikey": self.anon_key, "Accept": "application/json"},
                 timeout=httpx.Timeout(3.0, connect=2.0),
             )
-            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v8"
+            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v9"
         except (httpx.HTTPError, ValueError):
             return False
 
@@ -130,6 +130,15 @@ class SupabaseRepository:
         if isinstance(result, list) and len(result) == 1:
             result = result[0]
         if not isinstance(result, bool):
+            raise SupabaseStoreError()
+        return result
+
+    def export_workspace_data(self) -> dict[str, Any]:
+        """Export the current workspace through an owner-authorized RPC and RLS token."""
+        scope = self._current_scope()
+        result = self._request("POST", "rpc/export_my_workspace", token=scope.access_token,
+            body={"target_org": scope.organization_id})
+        if not isinstance(result, dict) or result.get("schema_version") != 1:
             raise SupabaseStoreError()
         return result
 

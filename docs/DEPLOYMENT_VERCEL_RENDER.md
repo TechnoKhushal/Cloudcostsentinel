@@ -54,7 +54,7 @@ Do not configure `ALLOW_MOCK_IN_PRODUCTION`; it is not read by this application.
 
 If users access another stable Vercel alias, append that exact origin, comma-separated, without a trailing slash. Do not use `*`. Keep Render's injected `PORT`. The demo's `/tmp/cloudcost-sentinel.db` is ephemeral and records can disappear on restart/redeploy. Do not set `DATABASE_PATH` or `DATABASE_URL` for production: production startup requires Supabase Auth configuration and the Supabase-backed repository, with no SQLite or direct-Postgres fallback. [Render provides `RENDER=true`](https://render.com/docs/environment-variables); startup refuses `ENVIRONMENT=development` on Render and requires `HOST=0.0.0.0`.
 
-Do not copy these demo settings into a real production deployment. Production requires the Supabase variables and all eight migrations in [Supabase setup](SUPABASE_SETUP.md), `DECIDER_PROVIDER=rules` or a verified external HTTP decider, `NOTIFICATION_PROVIDER=disabled` or a verified provider, and a successful schema readiness probe. The frontend's Supabase sign-in flow is implemented but still requires real-project lifecycle testing.
+Do not copy these demo settings into a real production deployment. Production requires the Supabase variables and all nine migrations in [Supabase setup](SUPABASE_SETUP.md), `DECIDER_PROVIDER=rules` or a verified external HTTP decider, `NOTIFICATION_PROVIDER=disabled` or a verified provider, and a successful schema readiness probe. The frontend's Supabase sign-in flow is implemented but still requires real-project lifecycle testing.
 
 ## Post-deploy smoke checks
 
