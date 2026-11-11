@@ -1,2 +1,18 @@
+project_id = "cloudcostsentinel"
+
+[auth]
+enabled = true
+# The frontend uses window.location.origin for verification and recovery links.
+# Keep this list exact; add a Vercel preview origin only when intentionally testing it.
+site_url = "https://cloudcostsentinel.vercel.app"
+additional_redirect_urls = [
+  "https://cloudcostsentinel.vercel.app",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]
+
+[auth.email]
+enable_confirmations = true
+
 [functions.delete-account]
 verify_jwt = true
