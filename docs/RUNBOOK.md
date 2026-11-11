@@ -2,7 +2,7 @@
 
 This runbook provides step-by-step operational procedures for running, monitoring, migrating, and troubleshooting CloudCost Sentinel.
 
-For a hosted public synthetic demo, use [DEMO_DEPLOYMENT.md](DEMO_DEPLOYMENT.md). The browser UI does not yet implement OIDC login; do not treat it as a usable authenticated production dashboard.
+For a hosted public synthetic demo, use [DEMO_DEPLOYMENT.md](DEMO_DEPLOYMENT.md). The frontend includes Supabase sign-in and recovery flows, but the hosted production Supabase project, migrations, email delivery, AWS role path, and deployment configuration have not been verified. Do not treat the public synthetic deployment as a customer workspace.
 
 ---
 
@@ -64,18 +64,21 @@ CloudCost Sentinel exposes two distinct probes:
 - Reports configured/simulated provider states without asserting external connectivity.
 
 ### 3. Readiness Probe: `GET /api/health/ready`
-- Checks the SQLite repository and required provider state. In `ENVIRONMENT=demo`, simulated providers are expected. In production, providers currently remain unverified until bounded live checks are implemented.
+- Checks local SQLite availability in development/demo and the Supabase schema contract plus platform AWS assume-role identity in production. It does not verify a customer's role or query customer billing data; use the integration verification flow for that.
   ```json
   {
     "status": "ready",
     "environment": "demo",
     "checks": {
-      "database": "connected",
+    "database": "connected",
+    "persistence_provider": "sqlite",
       "decider": "simulated",
       "narrator": "offline"
     }
   }
   ```
+
+Every response includes an `X-Request-ID`. API responses are marked `Cache-Control: no-store`; production responses include HSTS. The backend validates the Host header against `TRUSTED_HOSTS` or Render's injected `RENDER_EXTERNAL_HOSTNAME`.
 
 ---
 

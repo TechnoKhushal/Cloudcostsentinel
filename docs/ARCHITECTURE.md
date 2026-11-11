@@ -1,82 +1,81 @@
-# CloudCost Sentinel — Architecture & System Design
+# CloudCost Sentinel — Current Architecture
 
-**Tags:** `#strands-decider-2b` `#policy`
+This page describes the code that exists in this repository. The public Render/Vercel deployment remains an explicitly shared synthetic demo. The production Supabase and customer-owned AWS paths are implemented in source, but their live project configuration and tenant-isolation behavior are not yet verified. See [production readiness](PRODUCTION_READINESS.md) and the detailed [execution flow](../flow.md).
 
-**Current runtime note:** The public demo uses synthetic data and a simulated decision provider. Explanations run through a deterministic offline fallback unless backend-only OpenRouter variables are configured. Render demo mode defaults to SQLite under `/tmp`; that data is ephemeral. Supabase schema is under development but the API is not wired to it.
-
----
-
-## 1. High-Level System Overview
-
-CloudCost Sentinel decouples the **System 1 operational choice** (fast, low-latency pointer decision) from the **generative investigation narrative** (grounded reasoning report).
+## System view
 
 ```mermaid
-flowchart TD
-    subgraph Data Layer
-        CE["AWS Cost Explorer (Read-Only)"] -.->|Optional Live Telemetry| Ingestion
-        SimData["Synthetic Scenario Engine"] -->|Deterministic Data| Ingestion["Telemetry Ingestion & Normalization"]
-    end
+flowchart LR
+    Browser[React + TypeScript + Vite]
+    Auth[Supabase Auth]
+    API[FastAPI]
+    AuthZ[JWT verification + workspace role]
+    Source{Input source}
+    Demo[Synthetic scenario registry]
+    AWS[STS AssumeRole + Cost Explorer]
+    Math[Deterministic cost analyzer]
+    Policy[Rules or external Decider]
+    Report[Optional OpenRouter narrator\n(or deterministic template)]
+    Store{Repository}
+    SQLite[(SQLite local/demo)]
+    Supabase[(PostgREST + Postgres RLS)]
+    Storage[(Private Supabase Storage)]
 
-    subgraph Analysis & Mathematical Engine
-        Ingestion --> Math["Statistical Windowing & Metric Calculations"]
-        Math -->|Normalized State| Boundary{"Threshold-Aware Anomaly Policy"}
-    end
-
-    subgraph Decision Boundary
-        Boundary -->|Compact State & ChoiceQuestion| Decider["Strands Decider 2B<br/>(Pointer Decision Head)"]
-        Decider -->|Choice + Calibrated Confidence| ConfCheck{"Confidence >= 0.65?"}
-        ConfCheck -->|Yes| ActionRouting["Action Router"]
-        ConfCheck -->|No / Error| SafetyFallback["Safety Override<br/>(Fallback: request_approval)"]
-        SafetyFallback --> ActionRouting
-    end
-
-    subgraph Execution & Intervention
-        ActionRouting -->|monitor| ObsLog["Passive Observation Event"]
-        ActionRouting -->|notify_owner| AlertQueue["Owner Notification Dispatch"]
-        ActionRouting -->|request_approval| ApprQueue["Human Approval Queue"]
-    end
-
-    subgraph Generative Narrative Layer
-        Math --> OpenRouter["Optional OpenRouter"]
-        ActionRouting --> OpenRouter
-        OpenRouter --> GroundedReport["Grounded Investigation Report<br/>(Facts, Audit, Safe Steps)"]
-    end
-
-    subgraph Storage & Presentation
-        ObsLog --> SQLite[("Current SQLite demo repository")]
-        AlertQueue --> SQLite
-        ApprQueue --> SQLite
-        GroundedReport --> SQLite
-        SQLite --> UI["Cloud Operations Command Center<br/>(React + Vite + Recharts)"]
-        Supabase["Supabase schema / RLS<br/>(not yet connected to API)"]
-    end
+    Browser --> Auth
+    Browser -->|Bearer token + API request| API
+    API --> AuthZ
+    AuthZ --> Source
+    Source --> Demo
+    Source --> AWS
+    AWS --> Math
+    Demo --> Math
+    Math --> Policy
+    Math --> Report
+    Policy --> Report
+    Report --> Store
+    Store --> SQLite
+    Store --> Supabase
+    Report -. private object .-> Storage
+    Store -->|JSON response| Browser
 ```
 
----
+## Request lifecycle
 
-## 2. Component Responsibilities
+1. `frontend/src/main.tsx` mounts `AuthGate`, `ErrorBoundary`, and `App`.
+2. `AuthGate` restores the browser Supabase session when configured. `frontend/src/api.ts` sends the access token to the configured FastAPI origin.
+3. `backend/main.py` applies host validation, CORS, request-size/demo limits, request IDs, safe response headers, and API routing.
+4. Protected route dependencies in `backend/auth.py` verify the JWT, resolve a Supabase workspace, enforce viewer/reviewer/admin role, and set a caller-token request scope.
+5. `analyze_anomaly` selects permitted synthetic input in development/demo or the saved customer role in production. Production configuration refuses disabled AWS ingestion and mock decisions.
+6. `AWSCostExplorerService` assumes the customer-owned read-only role with a workspace external ID and queries bounded Cost Explorer data. The durable Supabase quota limits billable workspace queries.
+7. `cost_analyzer.py` computes metrics; `decider_client.py` produces a policy decision; confidence/error safeguards fail toward human review.
+8. `narrator.py` may send a bounded metric summary to OpenRouter when configured. The deterministic fallback works without the AI provider, and the narrator cannot change the decision.
+9. The repository persists a tenant-scoped analysis bundle. Production calls PostgREST/Storage using the caller's JWT so database RLS remains the tenant boundary. Local/demo uses SQLite.
+10. The UI displays source and quality labels, restores the latest saved analysis, and supports internal approval review. An approval does not mutate AWS resources.
 
-| Component | Responsibility | Boundary & Constraints |
-| :--- | :--- | :--- |
-| **Telemetry Ingestion & Formulas** | Computes baseline, delta amount, delta percentage, persistence streak, budget velocity, and data uncertainty. | Deterministic mathematics; no magic thresholds. Excludes recent spikes from baseline to avoid metric pollution. |
-| **Strands Decider 2B** | Evaluates normalized state against exact `ChoiceQuestion` (`monitor`, `notify_owner`, `request_approval`). Returns argmax choice and calibrated confidence. | Zero open-ended text generation; strictly evaluates typed options in a single forward pass. |
-| **Confidence Guard & Fallback** | Monitors calibrated model confidence against `DECIDER_MIN_CONFIDENCE` (default 0.65). If below threshold or if inference fails, forces `request_approval`. | High-assurance safety mechanism preventing autonomous under-reaction to ambiguous telemetry. |
-| **Strands Intervention Handler** | Implements `ThresholdAwareAnomalyIntervention(InterventionHandler)` from the Strands Agents SDK to gate agent tools prior to execution. | Maps `monitor` -> `Proceed`, `notify_owner` -> `Guide`, and `request_approval` -> `Confirm`. |
-| **Optional OpenRouter Narrator** | Produces a structured explanation from bounded telemetry. | Backend-only key, explicit model selection, bounded output, strict validation, one transient retry. Deterministic offline fallback is labeled and never overrides the Decider. |
-| **Human Review Queue** | Stores pending remediation recommendations for manual engineer sign-off. | Non-mutative sandbox; human approval updates internal audit state without triggering live resource deletions. |
-| **Command Center UI** | Dashboard displaying spend curves, Decider choices, wire-level traces, reports, and approval buttons. | React 19 + TypeScript + Vite. Account/workspace frontend and Supabase-backed persistence remain unimplemented. |
+## Module responsibilities
 
----
+| Area | Location | Responsibility |
+| --- | --- | --- |
+| API composition and route handlers | `backend/main.py` | Lifespan, request middleware, validation, role dependencies, provider orchestration, and response contracts. |
+| Configuration and auth | `backend/config.py`, `backend/auth.py` | Environment validation, Supabase JWT verification, workspace resolution, and RBAC. |
+| Persistence adapters | `backend/database/` | SQLite for development/demo; Supabase caller-token PostgREST and private Storage for production. |
+| Domain schemas | `backend/models/` | Typed cost anomalies, decisions, approvals, and reports. |
+| Provider/domain services | `backend/services/` | Cost formulas, AWS ingestion, policy client, grounded report generation, and notification adapter. |
+| Browser UI | `frontend/src/` | Screens, auth gate, typed API client, visualizations, and state orchestration. |
+| Database schema | `supabase/migrations/` | Ordered tenant tables, policies, RPCs, workspace AWS settings, and readiness contract. |
+| Verification | `tests/`, `frontend/tests/`, `.github/workflows/ci.yml` | Backend/frontend suites, SQL migration smoke checks, and container build smoke. |
 
-## 3. Trust Boundaries & AWS Safety Model
+## Trust and deployment boundaries
 
-1. **Read-Only Telemetry:**
-   - AWS Cost Explorer client connects with strictly read-only permissions (`ce:GetCostAndUsage`, `sts:GetCallerIdentity`).
-   - Default is `AWS_COST_EXPLORER_ENABLED=false` so the app runs out-of-the-box deterministically.
+- **Production persistence:** Supabase Auth + caller-JWT PostgREST/Postgres RLS + private Storage. No service-role key or direct database password belongs in the app request path.
+- **Cloud data:** Customer-owned IAM role, unique per-workspace external ID, short-lived STS credentials, and `ce:GetCostAndUsage`. No infrastructure mutation permissions.
+- **AI:** Optional server-side OpenRouter credentials only. Send a bounded metric summary; do not send AWS keys, role credentials, or raw account identifiers.
+- **Demo:** Shared, unauthenticated, synthetic data and SQLite. Demo records are not private or durable. The demo write limiter is process-local and is suitable only for a single instance.
+- **Production readiness:** AWS query allowance is tenant-scoped and durable. Authenticated production routes consume fixed per-user rolling-window limits from Supabase after JWT and role verification. A shared-store failure denies protected requests. Public liveness/readiness probes remain unauthenticated for platform health checks.
 
-2. **No Mutative IAM Permissions:**
-   - The agent has zero IAM permissions for `ec2:TerminateInstances`, `ec2:ModifyInstanceAttribute`, `autoscaling:UpdateAutoScalingGroup`, or `rds:ModifyDBInstance`.
-   - The product's signature is **decision guidance and human approval creation**, not unverified destruction.
+## Known product boundaries
 
-3. **Zero Secret Leakage:**
-   - No credentials or API keys are ever committed, logged, or returned in HTTP API responses.
+- Personal workspaces exist; invitations and multi-member organization administration do not.
+- Notification adapters support disabled, mock, and AWS SNS. Mock delivery is not real delivery.
+- Subscription payments, account deletion/retention automation, and support operations are not implemented.
+- Hosted Supabase migrations/RLS, actual customer AWS roles, auth email delivery, and production deployment settings still need live verification.

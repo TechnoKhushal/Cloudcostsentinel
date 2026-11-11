@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -22,6 +23,8 @@ from .auth import AuthenticatedPrincipal, require_admin, require_reviewer, requi
 from .config import settings
 from .database.db import ApprovalConflictError, DatabaseRepository
 from .database.supabase import SupabaseRepository, SupabaseStoreError, supabase_repository
+from .logging_config import configure_logging
+from .middleware import RequestBodyLimitMiddleware
 from .models.approval import ApprovalItem
 from .models.cost import CostAnomaly
 from .models.decision import DeciderResponseTrace
@@ -32,10 +35,7 @@ from .services.confidence import mock_confidence
 from .services.decider_client import DeciderClient
 from .services.narrator import OpenRouterNarrator
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+configure_logging()
 logger = logging.getLogger("cloudcost_sentinel.app")
 
 
@@ -78,6 +78,9 @@ app = FastAPI(
     description="Read-only Cloud Cost Decision Support using deterministic analysis and optional OpenRouter explanations",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None if settings.ENVIRONMENT == "production" else "/docs",
+    redoc_url=None if settings.ENVIRONMENT == "production" else "/redoc",
+    openapi_url=None if settings.ENVIRONMENT == "production" else "/openapi.json",
 )
 
 
@@ -102,11 +105,14 @@ async def get_root() -> Dict[str, str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["http://localhost:5173"],
-    allow_credentials=True,
+    # The browser sends explicit bearer tokens; the API does not use cookies.
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
     max_age=600,
 )
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=65_536)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.TRUSTED_HOSTS)
 
 # Production never constructs or falls back to SQLite. SQLite remains a local/demo
 # adapter; production uses PostgREST with the caller's JWT and database RLS.
@@ -129,16 +135,21 @@ _request_hits: Dict[tuple[str, str], List[float]] = {}
 
 @app.middleware("http")
 async def request_safety_limits(request: Request, call_next):
-    """Bound JSON payloads and public demo request rates per process and client IP."""
+    """Bound request size/rate and attach safe request correlation/security headers."""
+    started_at = time.perf_counter()
+    supplied_request_id = request.headers.get("x-request-id", "")
+    request_id = supplied_request_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", supplied_request_id) else uuid.uuid4().hex
+    request.state.request_id = request_id
     content_length = request.headers.get("content-length")
+    response: Response | None = None
     if content_length:
         try:
             if int(content_length) > 65_536:
-                return JSONResponse(status_code=413, content={"detail": "Request body exceeds 64 KiB."})
+                response = JSONResponse(status_code=413, content={"detail": "Request body exceeds 64 KiB."})
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+            response = JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
 
-    if settings.ENVIRONMENT == "demo" and request.method == "POST":
+    if response is None and settings.ENVIRONMENT == "demo" and request.method == "POST":
         if len(_request_hits) > 10_000:
             now = time.monotonic()
             for stale_key in list(_request_hits):
@@ -148,19 +159,49 @@ async def request_safety_limits(request: Request, call_next):
                 else:
                     del _request_hits[stale_key]
             if len(_request_hits) > 10_000:
-                return JSONResponse(status_code=429, content={"detail": "Demo request limiter is at capacity. Try again later."})
+                response = JSONResponse(status_code=429, content={"detail": "Demo request limiter is at capacity. Try again later."})
         path = request.url.path
         limit = 10 if path == "/api/analyze" else 30 if path.startswith("/api/approvals/") else None
-        if limit:
+        if limit and response is None:
             client = request.client.host if request.client else "unknown"
             key = (client, path)
             now = time.monotonic()
             recent = [hit for hit in _request_hits.get(key, []) if now - hit < 60]
             if len(recent) >= limit:
-                return JSONResponse(status_code=429, content={"detail": "Demo request limit reached. Try again in one minute."})
-            recent.append(now)
-            _request_hits[key] = recent
-    return await call_next(request)
+                response = JSONResponse(status_code=429, content={"detail": "Demo request limit reached. Try again in one minute."})
+            else:
+                recent.append(now)
+                _request_hits[key] = recent
+    if response is None:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.error(
+                "request failed",
+                extra={"request_id": request_id, "http_method": request.method,
+                       "http_path": request.url.path, "error_type": type(exc).__name__},
+            )
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error. Include the request ID when contacting support."},
+            )
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path.startswith("/api/"):
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        response.headers["Cache-Control"] = "no-store"
+    if settings.ENVIRONMENT == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    logger.info(
+        "request completed",
+        extra={"request_id": request_id, "http_method": request.method,
+               "http_path": request.url.path, "http_status": response.status_code,
+               "duration_ms": round((time.perf_counter() - started_at) * 1000, 2)},
+    )
+    return response
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -425,11 +466,7 @@ async def analyze_anomaly(
     principal: AuthenticatedPrincipal = Depends(require_viewer),
 ) -> Dict[str, Any]:
     """Analyze cloud spend anomaly, invoke Strands Decider 2B, and generate investigation report."""
-    logger.info(
-        "Executing analysis for authenticated user %s (AWS live: %s)",
-        principal.sub[:8],
-        req.use_aws_cost_explorer,
-    )
+    logger.info("Analysis request accepted (AWS live: %s).", req.use_aws_cost_explorer)
 
     if settings.ENVIRONMENT == "demo" and (req.use_aws_cost_explorer or req.custom_anomaly is not None):
         raise HTTPException(
@@ -592,7 +629,7 @@ async def record_approval_decision(
             detail=f"Approval item '{approval_id}' not found.",
         )
 
-    logger.info("Approval %s marked as %s by verified reviewer %s", approval_id, req.action, principal.sub[:8])
+    logger.info("Approval review recorded (action: %s).", req.action)
     return updated
 
 

@@ -1,5 +1,7 @@
 # CloudCost Sentinel — Production Hardening Log
 
+> Historical baseline/change log. Its status and verification entries are snapshots from their recorded dates and may describe superseded architecture. For the current architecture and release state, see `docs/ARCHITECTURE.md` and `docs/PRODUCTION_READINESS.md`.
+
 **Date:** 2026-10-23  
 **Repository:** https://github.com/TechnoKhushal/Cloudcostsentinel  
 **Status:** Pending verification — source-level changes are not proof of live or current test success

@@ -15,9 +15,10 @@ This document records the actual current source flow and separates it from plann
 
 1. `backend/main.py` constructs the FastAPI application and selects its repository at import time: production uses `SupabaseRepository`; local/development/demo use `DatabaseRepository` (SQLite).
 2. The FastAPI lifespan calls `settings.validate_startup()`, initializes persistence, and in production checks `db.check_ready()` against the expected Supabase schema contract.
-3. CORS middleware allows configured origins. `request_safety_limits` bounds request bodies and applies the current in-process rate limiter to public demo write endpoints.
+3. Trusted-host validation checks the incoming Host header; the request-body middleware bounds buffered JSON/write bodies to 64 KiB, including chunked requests. CORS allows configured origins, while `request_safety_limits` adds request IDs/headers/logging and applies the in-process limiter only to public demo writes.
 4. A protected route depends on `require_viewer`, `require_reviewer`, or `require_admin` from `backend/auth.py`. JWT validation identifies the user; `_resolve_workspace` resolves membership through Supabase; role checks run before the route handler; the repository request scope is reset after the dependency completes.
-5. `backend/main.py` handlers validate request models, call domain services/repositories, and translate known persistence/provider failures into bounded HTTP responses.
+5. In production, the route dependency consumes a shared Supabase rate-limit slot after identity and role checks. Each user has fixed database-enforced windows: 120 general requests/minute, 5 analyses/minute, and 3 AWS role verifications/minute. Storage failures deny the request rather than fail open.
+6. `backend/main.py` handlers validate request models, call domain services/repositories, and translate known persistence/provider failures into bounded HTTP responses.
 
 ## Live cost analysis path (production target already represented in source)
 

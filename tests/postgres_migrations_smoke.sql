@@ -18,9 +18,24 @@ values (:'created_workspace','arn:aws:iam::123456789012:role/CloudCostSentinelRe
 select 1 / case when public.reserve_aws_cost_query(:'created_workspace', 1) then 1 else 0 end as assert_first_request;
 select 1 / case when not public.reserve_aws_cost_query(:'created_workspace', 1) then 1 else 0 end as assert_second_request_denied;
 select 1 / case when not public.reserve_aws_cost_query(:'created_workspace', 1) then 1 else 0 end as assert_third_request_denied;
+select 1 / case when public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_1;
+select 1 / case when public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_2;
+select 1 / case when public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_3;
+select 1 / case when public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_4;
+select 1 / case when public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_5;
+select 1 / case when not public.admit_api_request('analysis') then 1 else 0 end as assert_analysis_rate_6_denied;
+do $$
+begin
+  perform public.admit_api_request('other');
+  raise exception 'expected unsupported rate-limit bucket to be rejected';
+exception when invalid_parameter_value then
+  null;
+end $$;
 
 reset role;
 select 1 / case when (select request_count from public.aws_cost_query_usage) = 2 then 1 else 0 end as assert_quota_counter_saturated;
+select 1 / case when (select request_count from public.api_request_counters where bucket = 'analysis') = 6 then 1 else 0 end
+  as assert_api_rate_counter_saturated;
 
 set role authenticated;
 insert into public.workspace_finops_settings(organization_id,monthly_budget,currency,updated_by)
@@ -35,7 +50,7 @@ select 1 / case when (select count(*) from public.cost_analyses) = 0 then 1 else
 
 reset role;
 set role anon;
-select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v6' then 1 else 0 end
+select 1 / case when public.cloudcost_sentinel_schema_version() = 'cloudcost-sentinel-v7' then 1 else 0 end
   as assert_production_readiness_probe;
 
 reset role;

@@ -64,7 +64,7 @@ class NotificationService:
 
         if self.provider == "mock":
             # Deterministic simulated delivery for demos/testing
-            logger.info("Mock notification queued for %s: %s", recipient, subject)
+            logger.info("Mock notification queued (recipient and message content omitted).")
             return NotificationResult(
                 status="queued_simulated",
                 provider="mock-simulated",
@@ -76,7 +76,7 @@ class NotificationService:
         if self.provider == "sns":
             # Live AWS SNS delivery
             if not self.is_valid_recipient(recipient) and not settings.NOTIFICATION_SNS_TOPIC_ARN:
-                logger.warning("Refusing to send SNS notification to invalid or internal placeholder: %s", recipient)
+                logger.warning("Refusing SNS notification to an invalid or placeholder recipient.")
                 return NotificationResult(
                     status="failed",
                     provider="aws-sns",
@@ -111,13 +111,13 @@ class NotificationService:
                         error="NOTIFICATION_SNS_TOPIC_ARN is not configured.",
                     )
             except Exception as exc:
-                logger.error("SNS publish failed: %s", exc)
+                logger.error("SNS publish failed (%s).", type(exc).__name__)
                 return NotificationResult(
                     status="failed",
                     provider="aws-sns",
                     recipient=recipient,
                     is_simulated=False,
-                    error=str(exc),
+                    error="SNS delivery failed. Check provider status and server configuration.",
                 )
 
         return NotificationResult(

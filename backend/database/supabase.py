@@ -116,9 +116,22 @@ class SupabaseRepository:
                 headers={"apikey": self.anon_key, "Accept": "application/json"},
                 timeout=httpx.Timeout(3.0, connect=2.0),
             )
-            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v6"
+            return response.status_code == 200 and response.json() == "cloudcost-sentinel-v7"
         except (httpx.HTTPError, ValueError):
             return False
+
+    def admit_api_request(self, bucket: str) -> bool:
+        """Atomically consume a caller-scoped production API rate-limit slot."""
+        scope = self._current_scope()
+        result = self._request("POST", "rpc/admit_api_request", token=scope.access_token,
+            body={"p_bucket": bucket})
+        if isinstance(result, dict):
+            result = result.get("admit_api_request")
+        if isinstance(result, list) and len(result) == 1:
+            result = result[0]
+        if not isinstance(result, bool):
+            raise SupabaseStoreError()
+        return result
 
     def save_analysis_bundle(self, anomaly: CostAnomaly, source: str, trace: DeciderResponseTrace,
                              approval: Optional[ApprovalItem], report: InvestigationReport,

@@ -1,5 +1,7 @@
 # Repository audit and repair log
 
+> Historical audit snapshot from 2026-10-26. It predates the Supabase production adapter and latest tenant AWS ingestion changes. Treat current source, `docs/PRODUCTION_READINESS.md`, and CI for the current commit as authoritative; historical verification counts and descriptions below are not current release evidence.
+
 Audit date: 2026-10-26
 
 Repository: `TechnoKhushal/Cloudcostsentinel`

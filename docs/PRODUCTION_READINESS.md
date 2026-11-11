@@ -1,12 +1,21 @@
 # Production readiness and deployment configuration
 
-## Current state as of 2026-11-08
+## Current state as of 2026-11-12
+
+### Phase 2 source verification (2026-11-12)
+
+- Backend unit/integration suite: 80 passed; Python compilation passed.
+- PostgreSQL 16: all seven ordered migrations and tenant isolation, fixed API rate-limit buckets, AWS quota saturation, and schema readiness smoke checks passed locally.
+- Frontend: 24 tests passed, lint and production build passed; `npm audit` found zero advisories.
+- Python dependency audit: `pip-audit -r requirements.txt` found no known vulnerabilities. Direct dependency licenses were inventoried (MIT/BSD/Apache families for Python, MIT/ISC/Apache for npm); no unused direct dependency was found.
+- High-confidence credential patterns: no matches in committed Git history; checks did not reveal or print secret values.
+- This is code-level evidence only. The new seventh migration is not yet applied to a live Supabase project, and the hosted Render/Vercel edge settings have not been reverified.
 
 **Authenticated production is NOT READY.** The live Render health endpoint currently reports `environment=demo`, `explicit_demo` authentication, SQLite persistence, a simulated decider, and AWS Cost Explorer disabled. Vercel's Stitch UI is live and currently consumes that shared synthetic API. This deployment is not suitable for customer billing data.
 
-The source includes Supabase Auth with PKCE and caller-JWT/RLS persistence, private reports, single-user personal workspaces, AWS customer-role connection endpoints, generated per-workspace external IDs, budget/currency settings, a durable per-workspace daily Cost Explorer query limit, persisted latest-analysis restoration with source and data-quality metadata, and a production schema-version readiness probe. Production startup now refuses to run with AWS Cost Explorer disabled, since production analysis accepts verified tenant AWS telemetry only. All six migrations apply in CI to a disposable PostgreSQL 16 instance with Supabase auth/storage interfaces stubbed; smoke checks cover workspace signup, analysis persistence and quality metadata, cross-user read denial, quota bounds, and the anonymous readiness probe. Production startup/readiness requires that probe to return the complete schema version. **The migrations have not been applied or verified against a live Supabase project**, and AWS STS/Cost Explorer calls have only mocked tests so far.
+The source includes Supabase Auth with PKCE and caller-JWT/RLS persistence, private reports, personal workspaces, AWS customer-role connection endpoints, generated per-workspace external IDs, budget/currency settings, durable per-workspace AWS and general API rate limits, persisted latest-analysis restoration with source and data-quality metadata, and a production schema-version readiness probe. Production startup refuses to run with AWS Cost Explorer disabled because production analysis accepts verified tenant AWS telemetry only. The seven ordered migrations are applied in CI to a disposable PostgreSQL 16 instance with Supabase auth/storage interfaces stubbed; smoke checks cover workspace provisioning, analysis persistence and quality metadata, cross-user read denial, AWS quota bounds, shared API rate limiting, and the readiness probe. Production startup/readiness requires that probe to return the complete schema version. **The migrations have not been applied or verified against a live Supabase project**, and AWS STS/Cost Explorer calls have only mocked tests so far.
 
-Still required: apply/rehearse all six migrations in the actual Supabase project; configure Supabase/Vercel/Render production variables and the platform's `sts:AssumeRole`-only IAM identity; validate the customer trust role and read-only policy with isolated AWS accounts; run two-user RLS and cost-query budget tests against Supabase; validate production backups/recovery and browser auth flows; and verify actual Render/Vercel settings. Signup currently provisions only personal workspaces; invitations/member management, subscription billing, retention/deletion and support/operations workflows are still absent. See [Supabase setup](SUPABASE_SETUP.md) and [verification log](audit/VERIFICATION.md).
+Still required: apply/rehearse all seven migrations in the actual Supabase project; configure Supabase/Vercel/Render production variables and the platform's `sts:AssumeRole`-only IAM identity; validate the customer trust role and read-only policy with isolated AWS accounts; run two-user RLS, API rate-limit, and cost-query budget tests against Supabase; validate production backups/recovery and browser auth flows; obtain an independent security review; and verify actual Render/Vercel settings. Signup currently provisions personal workspaces; invitations/member administration, subscription billing, retention/deletion, and support/operations workflows are still absent. See [Supabase setup](SUPABASE_SETUP.md) and [verification log](audit/VERIFICATION.md).
 
 The remainder of this document records the earlier 2026-10-26 demo audit and its historical checks.
 
@@ -88,7 +97,7 @@ Environment: Windows, Python 3.11.9, Node 24.21.0, npm 11.19.0. A fresh Python e
 1. The frontend implements Supabase Auth sign-up, sign-in, password recovery, session restoration/refresh, and bearer-token API calls using PKCE. Verify callback, email confirmation, recovery, JWT signing-key rotation, and sign-out flows against a configured Supabase project; these live-project lifecycle checks have not been run.
 2. Attach and verify durable storage, migration/backup/restore behavior, and operational recovery. Current public demo uses ephemeral SQLite unless Render is explicitly configured with a writable disk.
 3. Configure and verify real providers, IAM least privilege, provider timeouts/error states, and live data freshness. Current Render responses explicitly report simulated providers and AWS Cost Explorer off.
-4. Add shared rate limiting or keep one backend process; current demo controls are process-local and public.
+4. Apply migration 007 and verify the shared per-user API rate limits on the production Supabase project; keep demo process-local write limits confined to a single demo instance.
 5. Obtain dashboard access or inspect Vercel/Render deployment details to record the actual deployed SHAs, branch, root, build/start settings, environment scopes, and production access policy.
 6. Run an isolated end-to-end test deployment for a fresh analysis, approval success, duplicate/concurrent 409, and API failure/retry. Do not use the shared public demo approval queue for destructive or state-changing QA.
 

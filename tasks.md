@@ -17,16 +17,16 @@ This is the delivery checklist for the existing CloudCost Sentinel repository. W
 
 ## Phase 2 — Repository foundations and secure configuration
 
-- [ ] 11. Reconcile README, architecture, setup, and deployment documentation with the actual current code paths.
-- [ ] 12. Establish and document a clean module and package structure without breaking imports or migrations.
-- [ ] 13. Inventory dependencies, licenses, known vulnerabilities, unused packages, and supported runtime versions.
-- [ ] 14. Audit tracked files, Git history, ignore rules, build artifacts, and secret exposure.
-- [ ] 15. Make environment variable schemas consistent across backend, Vercel, Render, and local development.
-- [ ] 16. Fail closed on missing, malformed, or contradictory production configuration.
-- [ ] 17. Verify HTTPS, exact CORS origins, security headers, trusted hosts, and proxy behavior.
-- [ ] 18. Replace process-local production rate limits with shared limits or an explicitly justified hosted control.
-- [ ] 19. Add structured redacted logs, request IDs, safe error responses, and actionable health/readiness states.
-- [ ] 20. Complete phase-level lint, type checks, tests, dependency checks, and configuration documentation.
+- [x] 11. Reconcile README, architecture, setup, and deployment documentation with the actual current code paths; historical snapshots are labeled.
+- [x] 12. Establish and document a clean module and package structure without breaking imports or migrations.
+- [x] 13. Inventory direct dependencies/licenses/runtime versions; audit npm/Python advisories; check direct usage before removing packages.
+- [x] 14. Audit tracked files, Git history, ignore rules, build artifacts, and high-confidence credential patterns.
+- [x] 15. Make environment variable schemas consistent across backend, Vercel, Render, and local development.
+- [x] 16. Fail closed on missing, malformed, or contradictory production configuration.
+- [x] 17. Implement and locally verify HTTPS response policy, exact CORS origins, security headers, trusted hosts, and the Render proxy assumptions; live edge verification remains in Phase 10.
+- [x] 18. Keep demo-only process-local limits out of production and add Supabase-shared, fixed per-user API rate limits for production routes.
+- [x] 19. Add structured redacted logs, request IDs, safe error responses, and actionable health/readiness states.
+- [x] 20. Complete phase-level lint, type checks, tests, dependency checks, migration smoke tests, and configuration documentation.
 
 ## Phase 3 — Identity, workspace, and tenant authorization
 
@@ -122,7 +122,7 @@ This is the delivery checklist for the existing CloudCost Sentinel repository. W
 ## Phase 10 — Release assurance, deployment, and ongoing operations
 
 - [ ] 91. Run backend, frontend, migration, browser, and API contract tests on the final candidate revision.
-- [ ] 92. Run dependency/security scanning and resolve or explicitly triage release-blocking findings.
+- [ ] 92. Run dependency, secret-history, static security, and vulnerability scans; obtain an independent security review and resolve or explicitly triage release-blocking findings.
 - [ ] 93. Run performance, load, timeout, quota, and graceful-degradation checks.
 - [ ] 94. Review secrets and production environment settings without copying secrets into source or chat.
 - [ ] 95. Verify production backup, restore, incident response, data deletion, and access revocation drills.
@@ -135,3 +135,7 @@ This is the delivery checklist for the existing CloudCost Sentinel repository. W
 ## Phase completion rule
 
 A phase is complete only when all ten tasks in that phase are checked and its release evidence is recorded. Do not claim production readiness while any required external project configuration or tenant-isolation check remains unverified.
+
+## Production acceptance standard
+
+“Done” means customer data is isolated and access-controlled server-side; real provider responses and failure modes have been verified; no demo/mock path can be mistaken for live product behavior; backup/restore, revocation, deletion, and incident procedures have been exercised; and the exact release candidate has passed automated and browser checks. A green local test or successful deployment alone is not a production acceptance signal. A release with any open critical/high security issue or missing required external configuration is not customer-ready.

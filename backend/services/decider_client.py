@@ -130,8 +130,8 @@ class DeciderClient:
         if is_err:
             is_fallback = True
             final_action = "request_approval"
-            fallback_reason = f"Provider error: {err_msg}. Safely defaulting to human review."
-            logger.warning("Decider provider error, fallback applied: %s", fallback_reason)
+            fallback_reason = "Decider provider unavailable or returned an invalid response. Safely defaulting to human review."
+            logger.warning("Decider provider error (%s); safe fallback applied.", type(err_msg).__name__ if err_msg else "unknown")
         elif confidence < self.min_confidence:
             is_fallback = True
             final_action = "request_approval"
@@ -246,8 +246,8 @@ class DeciderClient:
                     None,
                 )
         except Exception as exc:
-            logger.error("HTTP Decider invocation failed: %s", exc)
-            return "request_approval", {"monitor": 0.33, "notify_owner": 0.33, "request_approval": 0.34}, 0.0, self.model_id, True, str(exc)
+            logger.error("HTTP Decider invocation failed (%s).", type(exc).__name__)
+            return "request_approval", {"monitor": 0.33, "notify_owner": 0.33, "request_approval": 0.34}, 0.0, self.model_id, True, "Decider provider is temporarily unavailable."
 
     def _call_inprocess_decider(
         self, state_str: str, question: Dict[str, Any]

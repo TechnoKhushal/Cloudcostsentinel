@@ -66,3 +66,41 @@ This log records decisions made during the staged productionization. New impleme
 - Notification mock/demo behavior exists; production notification delivery needs an explicit product decision.
 - Subscription billing, retention/deletion lifecycle, and broader support operations are absent.
 - The API examples and service providers are choices, not proof that credentials, free tiers, or production entitlements exist.
+
+## 2026-11-12 — Phase 2 implementation decisions
+
+### D-007: Derive Render Host validation from its injected public hostname
+
+**Choice:** Add `TRUSTED_HOSTS` with Render's `RENDER_EXTERNAL_HOSTNAME` as the hosted default, exact CORS origins, and no credentialed cross-origin cookies. Disable the FastAPI schema/docs routes in production.
+
+**Reason:** The application authenticates API calls with bearer tokens, and Render already supplies the service hostname. This avoids a new host-configuration secret/variable for the standard deployment while keeping custom API domains explicit.
+
+**Impact:** Production startup rejects wildcard/invalid host allowlists; Vercel and Render retain HTTPS security headers. The obsolete `X-XSS-Protection` response header was removed. Inline styles remain allowed by CSP because several existing React components use them; inline scripts remain disallowed.
+
+### D-008: Put production API rate counters in the existing Supabase database
+
+**Choice:** Add migration `202611120001_shared_api_rate_limits.sql`, with an RLS-protected counter table and a `SECURITY DEFINER` RPC whose fixed thresholds cannot be chosen by the caller. Apply it after the existing six migrations and change the readiness contract to v7.
+
+**Reason:** A process-local limiter does not coordinate across Render instances. Adding a separate Redis service would add secrets and operational dependencies; Supabase is already a required shared production service.
+
+**Limits:** 120 general authenticated API requests/minute, 5 analyses/minute, and 3 AWS role verifications/minute per user. The durable daily AWS query quota remains an independent billing cap. If the RPC cannot be reached, protected production requests fail closed.
+
+### D-009: Bound bodies at the ASGI receive boundary and keep provider errors redacted
+
+**Choice:** Add `RequestBodyLimitMiddleware` that enforces a 64 KiB maximum even when a request omits `Content-Length`; include a sanitized request ID, response security headers, and generic 500 responses. Emit JSON logs through an explicit safe-field allowlist; request events include method/path/status/duration without query, body, or bearer data. Provider error responses/logs expose exception classes, not raw exception messages.
+
+**Reason:** Checking only the declared length leaves a path for chunked bodies and raw dependency errors may reveal endpoints, identifiers, or provider response details.
+
+### D-010: Keep environment templates canonical and avoid dependency growth
+
+**Choice:** Keep backend/local variables in root `.env.example` and browser-public variables in `frontend/.env.example`; document the complete read set in README. Add no new environment variables for shared production rate limits and add no new dependency.
+
+**Reason:** Supabase provides the shared rate-limit store, so another service would complicate setup without a product need. The existing dependency tree is sufficient.
+
+**Audit evidence:** Current direct dependency inventories show declared licenses (Python runtime packages: MIT/BSD/Apache; npm direct packages: MIT/ISC/Apache), `npm audit` reports zero advisories, and `pip-audit -r requirements.txt` reports no known vulnerabilities. No unused direct dependency was identified in the frontend imports or backend requirements. A high-confidence credential-pattern scan of committed Git history found no matches (values were never printed).
+
+### D-011: Make historical documentation snapshots explicit
+
+**Choice:** Mark old architecture, Stitch, hardening, audit, and verification logs as historical where their statements no longer describe current source.
+
+**Reason:** Historical audit counts and architecture claims could otherwise be mistaken for release evidence. Current architecture and production readiness now point to current source/CI and the explicit live-project gaps.

@@ -20,6 +20,7 @@ from backend.services.cost_analyzer import calculate_spend_metrics, CostScenario
 from backend.services.decider_client import DeciderClient
 from backend.services.aws_cost_explorer import AWSCostExplorerService
 from backend.interventions.anomaly_policy import ThresholdAwareAnomalyIntervention
+from backend.logging_config import JsonLogFormatter
 from strands.interventions.actions import Confirm, Guide, Proceed
 
 
@@ -140,7 +141,8 @@ async def test_decider_http_provider_failure_fallback():
     # Must safely fallback to request_approval
     assert trace.action == "request_approval"
     assert trace.is_fallback is True
-    assert "provider error" in trace.fallback_reason.lower()
+    assert "provider unavailable" in trace.fallback_reason.lower()
+    assert "127.0.0.1" not in trace.fallback_reason
 
 
 # ==============================================================================
@@ -233,6 +235,92 @@ async def test_api_health_endpoint():
         assert "state" in data["providers"]["decider"]
         assert "narrator" in data["providers"]
         assert "auth" in data
+
+
+@pytest.mark.asyncio
+async def test_untrusted_host_is_rejected():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://untrusted.invalid") as ac:
+        resp = await ac.get("/api/health/live")
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_production_responses_enable_hsts(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/live")
+    assert resp.status_code == 200
+    assert resp.headers["strict-transport-security"] == "max-age=31536000"
+
+
+@pytest.mark.asyncio
+async def test_api_security_headers_and_request_id_are_present():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/api/health/live", headers={"X-Request-ID": "phase2-check.1"})
+    assert resp.status_code == 200
+    assert resp.headers["x-request-id"] == "phase2-check.1"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+
+@pytest.mark.asyncio
+async def test_invalid_request_id_is_replaced():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/live", headers={"X-Request-ID": "bad id"})
+    assert resp.status_code == 200
+    assert resp.headers["x-request-id"] != "bad id"
+    assert len(resp.headers["x-request-id"]) == 32
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_oversized_declared_body_with_security_headers():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/api/analyze", headers={"Content-Length": "65537"})
+    assert resp.status_code == 413
+    assert resp.headers["x-request-id"]
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_oversized_streamed_body_without_content_length():
+    async def chunks():
+        yield b"x" * 40_000
+        yield b"y" * 30_000
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/api/analyze", content=chunks())
+    assert resp.status_code == 413
+    assert resp.headers["x-request-id"]
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_production_trusted_hosts_rejects_wildcards():
+    configuration = Settings(
+        ENVIRONMENT="production", CORS_ORIGINS=["https://sentinel.example"], TRUSTED_HOSTS=["*.example.com"]
+    )
+    with pytest.raises(ValueError, match="TRUSTED_HOSTS"):
+        configuration._validate_trusted_hosts()
+
+
+def test_json_log_formatter_emits_safe_allowlisted_fields_only():
+    import json
+    import logging
+
+    record = logging.LogRecord("test", logging.INFO, "backend.py", 1, "request completed", (), None)
+    record.request_id = "req-safe-1"
+    record.http_method = "GET"
+    record.http_path = "/api/health/live"
+    record.authorization = "Bearer must-never-appear"
+    rendered = JsonLogFormatter().format(record)
+    event = json.loads(rendered)
+    assert event["request_id"] == "req-safe-1"
+    assert event["http_method"] == "GET"
+    assert event["http_path"] == "/api/health/live"
+    assert "authorization" not in event
+    assert "must-never-appear" not in rendered
 
 
 def test_demo_app_imports_when_strands_decider_package_is_absent():
@@ -928,7 +1016,7 @@ async def test_cors_allows_configured_preflight_and_rejects_unlisted_origin():
         )
     assert allowed.status_code == 200
     assert allowed.headers.get("access-control-allow-origin") == configured_origin
-    assert allowed.headers.get("access-control-allow-credentials") == "true"
+    assert "access-control-allow-credentials" not in allowed.headers
     assert "POST" in allowed.headers.get("access-control-allow-methods", "")
     assert "authorization" in allowed.headers.get("access-control-allow-headers", "").lower()
     assert "content-type" in allowed.headers.get("access-control-allow-headers", "").lower()

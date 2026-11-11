@@ -4,11 +4,13 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 
 **The migrations below have not been applied to a live Supabase project.** Unit tests use mocked HTTP and do not prove Postgres SQL syntax, RLS behavior, JWT signing-key compatibility, or Storage policies. Authenticated production is not ready until the steps under “Before production” are completed in an isolated project and the deployment is configured.
 
+Production API rate limits are stored in Supabase and enforced after caller authentication/workspace resolution: 120 general requests/minute, 5 analyses/minute, and 3 AWS role verifications/minute per user. The database selects fixed thresholds; clients cannot increase them. If the shared rate-limit store is unavailable, protected requests fail closed with HTTP 503. The daily AWS query quota remains a separate billable-call safeguard.
+
 ## Clean installation
 
 1. Create a dedicated Supabase project. Enable email/password authentication and email verification. Configure allowed redirect URLs to the exact Vercel site and local development URL.
 2. Set an asymmetric Supabase JWT signing key (RS256 or ES256) and note the project's URL and publishable/anon key. The backend verifies asymmetric JWTs using the Supabase JWKS endpoint.
-3. Back up the project if it contains data. Apply the six migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, `202611070001_tenant_aws_role_connections.sql`, `202611070002_production_schema_readiness.sql`, and `202611080001_persist_analysis_quality_metadata.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
+3. Back up the project if it contains data. Apply the seven migrations in order: `202610260001_initial_tenant_schema.sql`, `202610260002_api_runtime.sql`, `202610260003_membership_role_and_storage_cleanup.sql`, `202611070001_tenant_aws_role_connections.sql`, `202611070002_production_schema_readiness.sql`, `202611080001_persist_analysis_quality_metadata.sql`, and `202611120001_shared_api_rate_limits.sql`. Use the Supabase SQL editor or CLI and keep each applied migration recorded; never edit an already applied migration in place.
 4. Inspect the tables, functions, RLS policies, private `sentinel-reports` bucket, `aws_account_connections`, durable per-workspace query counters, and workspace budget table. Run adversarial tests with two isolated accounts and verify cross-workspace reads, writes, approvals, AWS connections, budgets, object downloads and deletes fail.
 5. Configure the frontend and backend variables below. Deploy API and frontend only after migration, AWS role trust, and account-flow checks pass.
 
@@ -30,6 +32,7 @@ The API now has a production code path that validates Supabase Auth JWTs, provis
 | `HOST` | Yes | `0.0.0.0`. |
 | `AUTH_ENABLED` | Yes | `true`. |
 | `CORS_ORIGINS` | Yes | Exact comma-separated Vercel origin(s), HTTPS, no wildcard or path. |
+| `TRUSTED_HOSTS` | Render default or custom domain | Comma-separated API hostnames. Render's injected `RENDER_EXTERNAL_HOSTNAME` is used when omitted; set explicit names for custom domains. |
 | `SUPABASE_URL` | Yes | Same Supabase project origin as frontend. |
 | `SUPABASE_ANON_KEY` | Yes | Same public key as frontend; backend sends it with each user's verified bearer token. |
 | `DECIDER_PROVIDER` | Yes | `rules` for deterministic policy decisions. `mock` is blocked in production. |

@@ -1,5 +1,7 @@
 # Stitch export inventory and implementation checklist
 
+> The export observations below describe the original static mockups. The implementation-status table has since been updated against the current React/API code. These notes are design provenance, not a test or production-readiness record.
+
 Source of visual reference: `C:\Users\HP\Downloads\stitch_cloudcost_sentinel_ui_platform.zip` (1.77 MB), inspected without modifying the archive; extracted under ignored `.tmp/stitch-inspect-20261027/`.
 
 ## Export format and assets

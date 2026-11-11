@@ -13,9 +13,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
         "202611070001_tenant_aws_role_connections.sql",
         "202611070002_production_schema_readiness.sql",
         "202611080001_persist_analysis_quality_metadata.sql",
+        "202611120001_shared_api_rate_limits.sql",
     ]
-    base, runtime, upgrade, customer_aws, readiness, quality_metadata = (path.read_text(encoding="utf-8").lower() for path in migrations)
-    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata):
+    base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits = (path.read_text(encoding="utf-8").lower() for path in migrations)
+    for sql in (base, runtime, upgrade, customer_aws, readiness, quality_metadata, rate_limits):
         assert sql.lstrip().startswith("--")
         assert "begin;" in sql
         assert sql.rstrip().endswith("commit;")
@@ -46,5 +47,10 @@ def test_ordered_migrations_define_private_tenant_storage_and_runtime_rls():
     assert "data_warnings jsonb" in quality_metadata
     assert "partial_data boolean" in quality_metadata
     assert "cloudcost-sentinel-v6" in quality_metadata
+    assert "api_request_counters" in rate_limits
+    assert "alter table public.api_request_counters enable row level security" in rate_limits
+    assert "public.admit_api_request(text)" in rate_limits
+    assert "cloudcost-sentinel-v7" in rate_limits
+    assert "p_limit" not in rate_limits and "p_window_seconds" not in rate_limits
     assert "service_role" not in customer_aws
-    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata
+    assert "service_role" not in base + runtime + upgrade + customer_aws + readiness + quality_metadata + rate_limits

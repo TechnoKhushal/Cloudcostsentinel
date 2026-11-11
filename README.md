@@ -118,27 +118,14 @@ Open `http://localhost:5173` in your browser.
 
 ## 5. Configuration (.env)
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `DECIDER_PROVIDER` | `mock` | `mock` (calibrated simulated adapter) or `http` (connects to external `strands-decider serve` instance) |
-| `STRANDS_DECIDER_URL` | `http://127.0.0.1:8080/v1/systemone` | HTTP endpoint serving Strands Decider SystemOne wire protocol (port 8080) |
-| `DECIDER_MODEL_ID` | `StrandsAgents/strands-decider-2B-hobson-v19` | Strands Decider model identifier |
-| `DECIDER_MIN_CONFIDENCE` | `0.65` | Confidence threshold below which the agent conservatively falls back to `request_approval` |
-| `OPENROUTER_API_KEY` | unset | Optional server-only key. Leave unset for offline deterministic reports. |
-| `OPENROUTER_MODEL` | unset | Required with the key; use `openrouter/free` or a verified model variant ending in `:free`. Paid model IDs are rejected. |
-| `OPENROUTER_HTTP_REFERER` | unset | Optional app URL attribution header. |
-| `AWS_REGION` | `us-east-1` | AWS region for Cost Explorer. |
-| `AWS_COST_EXPLORER_ENABLED`| `false` | Read-only live AWS Cost Explorer queries (disabled by default) |
-| `AUTH_ENABLED` | `false` | Local development only. Public production requires `true` and complete OIDC/JWKS configuration. Explicit `demo` mode is synthetic-only. |
-| `NOTIFICATION_PROVIDER` | `mock` | `disabled`, `mock`, or `sns` (AWS Simple Notification Service) |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Required for production | Supabase project origin and public anon/publishable key. Production uses the caller JWT and RLS; no service-role key. |
-| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | Required for authenticated frontend | Public Supabase URL/key only. |
-| `DATABASE_PATH` | Local/demo only | SQLite path for development or explicitly configured synthetic demo. Production never falls back to SQLite. |
-| `DATABASE_URL` | unset | Unsupported; startup refuses it rather than silently ignoring it. |
+The templates are the canonical, complete variable lists: [`.env.example`](.env.example) for backend/local use and [`frontend/.env.example`](frontend/.env.example) for browser-public build values. The backend reads `HOST`, `PORT`, `ENVIRONMENT`, `CORS_ORIGINS`, `TRUSTED_HOSTS`, `AUTH_ENABLED`, `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWKS_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DECIDER_PROVIDER`, `STRANDS_DECIDER_URL`, `DECIDER_MODEL_ID`, `DECIDER_MIN_CONFIDENCE`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_COST_EXPLORER_ENABLED`, `AWS_COST_EXPLORER_TIMEZONE`, `AWS_COST_EXPLORER_DAILY_QUERY_LIMIT`, `NOTIFICATION_PROVIDER`, `NOTIFICATION_SNS_TOPIC_ARN`, `DATABASE_PATH`, `DATABASE_URL`, and `ENABLE_TEST_FIXTURE_ENDPOINT`.
+
+The frontend reads only `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, and `VITE_SUPABASE_ANON_KEY`. Vite embeds `VITE_*` values into public browser assets; never place secrets there. Production rate limits use the configured Supabase project and require no additional environment variables.
 
 Detailed documentation:
 - [Security Architecture & Threat Model](docs/SECURITY.md)
 - [Operations Runbook](docs/RUNBOOK.md)
+- [Current Architecture](docs/ARCHITECTURE.md) and [Execution Flow](flow.md)
 - [Production Hardening Audit Log](docs/PRODUCTION_HARDENING_LOG.md)
 - [Public Simulated Demo Deployment](docs/DEMO_DEPLOYMENT.md)
 
@@ -162,7 +149,7 @@ Detailed documentation:
 Set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL=openrouter/free` in the backend environment only, or choose a verified model variant ending in `:free`. The backend rejects paid model IDs and does not configure a paid-model fallback. OpenRouter's [free router](https://openrouter.ai/openrouter/free) currently routes only to free variants, though availability and rate limits can change. The app has no default model and never places the key in Vite/browser variables. If unset or unavailable, it uses a clearly labeled deterministic fallback.
 
 ### Supabase status
-The six ordered migrations and deployment steps are documented in [Supabase setup](docs/SUPABASE_SETUP.md). The production adapter is implemented, but no live Supabase project was available to apply or verify the migrations, RLS policies or storage access. Do not enable production traffic until the documented two-account isolation and browser checks pass.
+The ordered migrations and deployment steps are documented in [Supabase setup](docs/SUPABASE_SETUP.md). The production adapter is implemented, but no live Supabase project was available to apply or verify the migrations, RLS policies or storage access. Do not enable production traffic until the documented two-account isolation and browser checks pass.
 
 ## 7. Hosted Demo / Production Status
 
@@ -187,6 +174,8 @@ python patterns/threshold_aware_anomaly_response/standalone_example.py
 # Run reproducible latency benchmark
 python scripts/benchmark_decider.py --trials 10 --warmup 2
 ```
+
+The API returns request IDs and security headers, marks API responses `Cache-Control: no-store`, and rejects untrusted Host headers. Production CORS does not enable cookies because the browser uses bearer tokens. The demo's in-process write limiter is demo-only; production authenticated API calls use Supabase-shared per-user limits, with a separate durable quota for billable AWS queries.
 
 ---
 

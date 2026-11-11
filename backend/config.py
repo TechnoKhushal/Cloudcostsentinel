@@ -50,6 +50,17 @@ def parse_cors_origins(raw: str) -> List[str]:
     return [normalize_cors_origin(item.strip().strip("'\"")) for item in cleaned.split(",") if item.strip().strip("'\"")]
 
 
+def parse_trusted_hosts() -> List[str]:
+    """Use explicit hosts, or Render's injected public hostname, for Host validation."""
+    configured = os.getenv("TRUSTED_HOSTS", "").strip()
+    if configured:
+        return [host.strip().lower() for host in configured.split(",") if host.strip()]
+    render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip().lower()
+    if render_hostname:
+        return [render_hostname]
+    return ["localhost", "127.0.0.1", "testserver", "test"]
+
+
 class Settings(BaseModel):
     HOST: str = Field(default_factory=lambda: os.getenv("HOST", "127.0.0.1"))
     PORT: int = Field(default_factory=lambda: int(os.getenv("PORT", "8000")))
@@ -59,6 +70,7 @@ class Settings(BaseModel):
             os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
         )
     )
+    TRUSTED_HOSTS: List[str] = Field(default_factory=parse_trusted_hosts)
 
     # Authentication & Authorization Settings
     # In development mode, authentication is optional and defaults to simulated dev principal.
@@ -168,6 +180,7 @@ class Settings(BaseModel):
                     "The /v1/systemone test fixture must never be active in production."
                 )
             self._validate_public_origins()
+            self._validate_trusted_hosts()
 
             # Production requires validated OIDC authentication. There is no bypass.
             if not self.AUTH_ENABLED:
@@ -279,6 +292,13 @@ class Settings(BaseModel):
                 or parsed.password
             ):
                 raise ValueError("Public CORS_ORIGINS must contain exact HTTPS origins without paths or credentials.")
+
+    def _validate_trusted_hosts(self) -> None:
+        if not self.TRUSTED_HOSTS:
+            raise ValueError("Production requires TRUSTED_HOSTS or Render's RENDER_EXTERNAL_HOSTNAME.")
+        for host in self.TRUSTED_HOSTS:
+            if "*" in host or "/" in host or ":" in host or not host or any(char.isspace() for char in host):
+                raise ValueError("Production TRUSTED_HOSTS must contain hostnames only; wildcards are prohibited.")
 
 
 settings = Settings()

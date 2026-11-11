@@ -6,7 +6,7 @@ from contextvars import Token
 
 import jwt
 from jwt import PyJWKClient
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -191,6 +191,7 @@ async def _resolve_workspace(principal: AuthenticatedPrincipal) -> Optional[Toke
 
 
 async def require_viewer(
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> AsyncIterator[AuthenticatedPrincipal]:
     """Requires viewer or reviewer role."""
@@ -198,6 +199,7 @@ async def require_viewer(
     try:
         if not principal.has_role("viewer"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: workspace membership required.")
+        await _enforce_request_rate_limit(request)
         yield principal
     finally:
         if scope_token is not None:
@@ -205,6 +207,7 @@ async def require_viewer(
 
 
 async def require_reviewer(
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> AsyncIterator[AuthenticatedPrincipal]:
     """Requires reviewer role (for approving/rejecting remediation items)."""
@@ -212,6 +215,7 @@ async def require_reviewer(
     try:
         if not principal.has_role("reviewer"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: reviewer role required.")
+        await _enforce_request_rate_limit(request)
         yield principal
     finally:
         if scope_token is not None:
@@ -219,6 +223,7 @@ async def require_reviewer(
 
 
 async def require_admin(
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> AsyncIterator[AuthenticatedPrincipal]:
     """Requires an organization owner or admin for account integrations."""
@@ -226,7 +231,31 @@ async def require_admin(
     try:
         if not principal.has_role("admin"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: workspace administrator role required.")
+        await _enforce_request_rate_limit(request)
         yield principal
     finally:
         if scope_token is not None:
             supabase_repository.reset_scope(scope_token)
+
+
+async def _enforce_request_rate_limit(request: Request) -> None:
+    """Apply a database-shared per-user limit after JWT and workspace verification."""
+    if settings.ENVIRONMENT != "production" or not settings.AUTH_ENABLED:
+        return
+    if request.url.path == "/api/analyze":
+        bucket = "analysis"
+    elif request.url.path == "/api/integrations/aws/verify":
+        bucket = "aws_verify"
+    else:
+        bucket = "default"
+    try:
+        admitted = await run_in_threadpool(supabase_repository.admit_api_request, bucket)
+    except SupabaseStoreError:
+        logger.warning("API rate-limit store is unavailable; request denied closed.")
+        raise HTTPException(status_code=503, detail="Request protection is temporarily unavailable. Retry shortly.") from None
+    if not admitted:
+        raise HTTPException(
+            status_code=429,
+            detail="Request rate limit reached. Retry shortly.",
+            headers={"Retry-After": "60"},
+        )

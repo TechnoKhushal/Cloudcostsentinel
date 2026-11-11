@@ -1,5 +1,7 @@
 # Verification log
 
+> Historical verification entries below are grouped by their recorded date. Earlier migration counts, local test totals, and deployment claims do not describe the latest source revision. Use CI attached to the current `main` commit and `docs/PRODUCTION_READINESS.md` for current evidence.
+
 ## Production schema, PKCE, and deployment follow-up (2026-11-07)
 
 - Applied all five ordered migrations in a disposable PostgreSQL 16 container after creating minimal Supabase-shaped `auth` and `storage` schemas. The first run caught and fixed a missing `UNIQUE (organization_id, id)` target needed by composite foreign keys from findings/reports to scans. This is a local compatibility smoke test; the hosted Supabase migration/RLS/Storage implementation remains unverified.

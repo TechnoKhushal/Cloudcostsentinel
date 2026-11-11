@@ -42,7 +42,7 @@ CloudCost Sentinel is a cloud cost decision-support application. Development/dem
 ### Public Simulated Demo
 - `ENVIRONMENT=demo` is an explicit shared public demo, not a tenant-secure production mode.
 - It requires the mock Decider, prohibits Cost Explorer and real notifications, accepts synthetic scenario IDs only, and marks the shared review queue as demo data. Reports use a clearly labeled deterministic fallback unless OpenRouter is explicitly configured.
-- Per-process limits do not coordinate across multiple replicas. Use one instance or add shared rate limiting before scaling.
+- Per-process limits apply only to the explicitly synthetic demo. Production authenticated API routes use shared Supabase-backed counters.
 - The shared demo uses SQLite and synthetic data. Demo-mode data is not tenant-isolated and must not contain customer records.
 - Supabase-authenticated workspace and AWS connection code exists, but the matching migrations must be applied and tested against a live Supabase project before production use.
 - Signup provisions a personal workspace. Workspace invitations, member management, organization switching, billing subscriptions, and retention/deletion workflows are still missing.
@@ -91,3 +91,6 @@ Generative explanations use OpenRouter's API from the backend only. Leave `OPENR
 - **No Secrets in Source**: `.env`, credentials, local SQLite databases, and benchmark results are strictly ignored in `.gitignore`.
 - **Log Redaction**: Account IDs in AWS Cost Explorer status checks are masked (e.g. `***1234`). Secret keys and session tokens are never logged.
 - **Health Endpoint Safety**: `/api/health` reports provider states (`simulated`, `configured_unverified`, `connected`) without exposing endpoints with credentials, private IP addresses, or internal tokens.
+- **Request Handling**: Backend responses include `X-Request-ID`, `nosniff`, frame-denial, referrer, and permissions headers. API responses are non-cacheable and use a restrictive content policy. Production responses include HSTS. `TrustedHostMiddleware` checks `TRUSTED_HOSTS` (or Render's injected public hostname); production rejects wildcard hosts. Production CORS does not enable cookies because browser API calls use bearer tokens.
+- **Redacted diagnostics**: Backend logs are JSON with an explicit field allowlist. Request events include request ID, method, route path, status, and duration; they omit query strings, request bodies, bearer tokens, customer AWS identifiers, and report text. Provider failures are logged by exception class rather than exception message.
+- **Rate limiting boundary**: Public demo POST limits are process-local and suitable only for a single demo instance. Production authenticated endpoints consume shared Supabase counters after user/workspace authorization: 120 general requests/minute, 5 analyses/minute, and 3 AWS role verifications/minute. The database fixes the limits, and an unavailable shared limiter denies protected requests. The daily workspace AWS quota is a separate cost guard. Public health probes do not require user authentication and should remain covered by hosting-level availability controls.

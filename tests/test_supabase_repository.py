@@ -25,7 +25,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
         assert request.headers["apikey"] == "public-anon-key"
         assert "authorization" not in request.headers
         assert json.loads(request.content) == {}
-        return httpx.Response(200, json="cloudcost-sentinel-v6")
+        return httpx.Response(200, json="cloudcost-sentinel-v7")
 
     repo = _repository(handler)
     try:
@@ -38,7 +38,7 @@ def test_production_readiness_requires_the_expected_complete_schema_version():
 @pytest.mark.parametrize("response", [
     httpx.Response(404, json={"message": "function not found"}),
     httpx.Response(200, json="incomplete"),
-    httpx.Response(200, json={"version": "cloudcost-sentinel-v6"}),
+    httpx.Response(200, json={"version": "cloudcost-sentinel-v7"}),
 ])
 def test_production_readiness_fails_if_schema_probe_is_missing_or_mismatched(response):
     repo = _repository(lambda _request: response)
@@ -46,6 +46,26 @@ def test_production_readiness_fails_if_schema_probe_is_missing_or_mismatched(res
         assert repo.check_ready() is False
     finally:
         repo.close()
+
+
+def test_shared_api_rate_limit_rpc_uses_caller_token_and_fixed_bucket():
+    user_id, organization_id = str(uuid4()), str(uuid4())
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        assert request.url.path == "/rest/v1/rpc/admit_api_request"
+        assert request.headers["authorization"] == "Bearer verified-user-token"
+        assert json.loads(request.content) == {"p_bucket": "analysis"}
+        return httpx.Response(200, json=False)
+
+    repo = _repository(handler)
+    repo.set_scope(RequestScope(user_id, organization_id, "owner", "verified-user-token"))
+    try:
+        assert repo.admit_api_request("analysis") is False
+    finally:
+        repo.close()
+    assert len(requests) == 1
 
 
 @pytest.mark.asyncio
